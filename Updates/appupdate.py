@@ -547,4 +547,262 @@ class ChatApp(ctk.CTk):
     def draw_gradient_background(self):
         self.bg_canvas = tk.Canvas(self, highlightthickness=0)
         self.bg_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
-        self.bind("
+        self.bind("<Configure>", self._paint_gradient)
+
+    def _paint_gradient(self, event=None):
+        self.bg_canvas.delete("gradient")
+        h = self.winfo_height()
+        if h == 0: return 
+        top_color, mid_color, bot_color = ("#e0eafc", "#cfdef3", "#e0eafc") if ctk.get_appearance_mode() == "Light" else ("#0f0c29", "#302b63", "#24243e")
+        for i in range(int(h/2)): self.bg_canvas.create_line(0, i, self.winfo_width(), i, fill=interpolate_color(top_color, mid_color, i / (h/2)), tags="gradient")
+        for i in range(int(h/2), h): self.bg_canvas.create_line(0, i, self.winfo_width(), i, fill=interpolate_color(mid_color, bot_color, (i - h/2) / (h/2)), tags="gradient")
+        self.bg_canvas.lower("all") 
+
+    def show_boot_screen(self):
+        self.boot_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.boot_frame.pack(fill="both", expand=True)
+        box = ctk.CTkFrame(self.boot_frame, fg_color=BG_SURFACE, corner_radius=15, border_width=1, border_color="#333")
+        box.place(relx=0.5, rely=0.5, anchor="center")
+        ctk.CTkLabel(box, text="📚 SourceAgent", font=(FONT_MAIN, 28, "bold"), text_color=ACCENT_PRIMARY).pack(pady=(40, 10), padx=50)
+        self.name_entry = ctk.CTkEntry(box, placeholder_text="Enter your name...", width=300, height=45)
+        self.name_entry.pack(pady=30, padx=40)
+        ctk.CTkButton(box, text="Launch Workspace", command=self.first_time_launch).pack(pady=(0, 40))
+
+    def first_time_launch(self):
+        if self.name_entry.get().strip(): 
+            self.user_name = self.name_entry.get().strip()
+            self.save_current_state()
+        self.boot_frame.destroy()
+        self.show_welcome_back_screen()
+
+    def show_welcome_back_screen(self):
+        self.welcome_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.welcome_frame.pack(fill="both", expand=True)
+        self.welcome_label = ctk.CTkLabel(self.welcome_frame, text=f"Welcome back, {self.user_name}.", font=(FONT_MAIN, 36, "bold"), text_color="#0f0c29")
+        self.welcome_label.place(relx=0.5, rely=0.5, anchor="center")
+        self.after(200, self.animate_fade_in)
+
+    def animate_fade_in(self, step=0):
+        if step <= 30:
+            self.welcome_label.configure(text_color=interpolate_color("#0f0c29", "#ffffff", step / 30))
+            self.after(30, lambda: self.animate_fade_in(step + 1))
+        else: self.after(1000, self.launch_workspace)
+
+    def launch_workspace(self):
+        if hasattr(self, 'welcome_frame'): self.welcome_frame.destroy()
+        self.build_main_ui()
+        threading.Thread(target=self.setup_ai, daemon=True).start()
+
+    # ==========================================
+    # 3. MAIN UI
+    # ==========================================
+    def build_main_ui(self):
+        self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
+        self.sidebar = ctk.CTkFrame(self, width=320, corner_radius=0, fg_color=BG_SIDEBAR)
+        self.sidebar.grid(row=0, column=0, sticky="nsew")
+        
+        ctk.CTkLabel(self.sidebar, text="📚 SourceAgent", font=(FONT_MAIN, 20, "bold")).pack(pady=(30, 20), padx=20, anchor="w")
+        ctk.CTkButton(self.sidebar, text="+ New Session", fg_color=ACCENT_PRIMARY, command=self.start_new_session).pack(fill="x", padx=20, pady=5)
+        
+        ctk.CTkLabel(self.sidebar, text="CHAT HISTORY", font=(FONT_MAIN, 11, "bold"), text_color=TEXT_MUTED).pack(anchor="w", padx=20, pady=(20, 5))
+        self.history_list = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent", height=200); self.history_list.pack(fill="x", padx=10, pady=5)
+        
+        ctk.CTkLabel(self.sidebar, text="KNOWLEDGE BASE", font=(FONT_MAIN, 11, "bold"), text_color=TEXT_MUTED).pack(anchor="w", padx=20, pady=(10, 5))
+        self.source_list = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent", height=120); self.source_list.pack(fill="x", padx=10, pady=5)
+        
+        # New Manage Sources & Upload Buttons
+        btn_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        btn_frame.pack(fill="x", padx=20, pady=10)
+        ctk.CTkButton(btn_frame, text="📄 Upload", width=130, command=self.upload_files, fg_color=BG_SURFACE).pack(side="left", expand=True)
+        ctk.CTkButton(btn_frame, text="🗑️ Manage", width=130, command=self.open_manage_sources_menu, fg_color="#e74c3c", hover_color="#c0392b").pack(side="right", expand=True)
+
+        ctk.CTkButton(self.sidebar, text="⚙️ Settings", command=self.open_settings_menu, fg_color="transparent", border_color="#333", border_width=1).pack(side="bottom", fill="x", padx=20, pady=20)
+
+        self.chat_container = ctk.CTkFrame(self, fg_color="transparent"); self.chat_container.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
+        self.chat_container.grid_rowconfigure(0, weight=1); self.chat_container.grid_columnconfigure(0, weight=1)
+        
+        self.chat_display = ctk.CTkTextbox(self.chat_container, state="disabled", font=(FONT_MAIN, 15), wrap="word", fg_color="transparent", spacing1=4, spacing3=4)
+        self.chat_display.grid(row=0, column=0, sticky="nsew", padx=10, pady=(10, 20))
+        self.status_indicator = ctk.CTkLabel(self.chat_container, text="🟢 Initializing Multi-Agent Core...", text_color=TEXT_MUTED)
+        self.status_indicator.grid(row=1, column=0, sticky="w", padx=15, pady=(0,5))
+
+        self.input_wrapper = ctk.CTkFrame(self.chat_container, fg_color=BG_SURFACE, corner_radius=12, border_width=1, border_color="#333")
+        self.input_wrapper.grid(row=2, column=0, sticky="ew"); self.input_wrapper.grid_columnconfigure(0, weight=1)
+        
+        self.user_input = ctk.CTkEntry(self.input_wrapper, placeholder_text="Ask the Agent Brain Trust...", height=55, border_width=0, fg_color="transparent")
+        self.user_input.grid(row=0, column=0, sticky="ew", padx=15); self.user_input.bind("<Return>", lambda e: self.send_message())
+        self.send_btn = ctk.CTkButton(self.input_wrapper, text="Send", width=80, command=self.send_message); self.send_btn.grid(row=0, column=1, padx=10)
+
+        self.update_sidebar_history(); self.update_source_list(); self.load_active_chat_to_display()
+
+    # ==========================================
+    # 4. CHAT HISTORY & RENAMING LOGIC
+    # ==========================================
+    def format_ui_text(self, text):
+        for rep in [("**", ""), ("* ", "• "), ("- ", "• "), ("### ", ""), ("## ", ""), ("# ", "")]: text = text.replace(*rep)
+        return text
+
+    def update_sidebar_history(self):
+        for w in self.history_list.winfo_children(): w.destroy()
+        for entry in reversed(self.session_history):
+            frame = ctk.CTkFrame(self.history_list, fg_color="transparent")
+            frame.pack(fill="x", pady=2)
+            btn = ctk.CTkButton(frame, text=entry['title'], anchor="w", fg_color="transparent", text_color=TEXT_MAIN, hover_color="#222", command=lambda sid=entry['id']: self.switch_to_session(sid))
+            btn.pack(side="left", fill="x", expand=True)
+            ctk.CTkButton(frame, text="✏️", width=25, fg_color="transparent", hover_color="#333", command=lambda sid=entry['id']: self.rename_chat(sid)).pack(side="right", padx=2)
+
+    def rename_chat(self, sid):
+        if new_title := ctk.CTkInputDialog(text="Enter new chat name:", title="Rename Session").get_input():
+            for entry in self.session_history:
+                if entry['id'] == sid: entry['title'] = new_title.strip(); break
+            self.save_current_state(); self.update_sidebar_history(); self.show_notification(f"✏️ Chat renamed to '{new_title.strip()}'", duration=3000)
+
+    def switch_to_session(self, sid):
+        self.current_session_id = sid; self.save_current_state(); self.load_active_chat_to_display()
+
+    def load_active_chat_to_display(self):
+        self.chat_display.configure(state="normal"); self.chat_display.delete("1.0", "end")
+        if os.path.exists(os.path.join(HISTORY_DIR, f"{self.current_session_id}.json")):
+            try:
+                for msg in json.load(open(os.path.join(HISTORY_DIR, f"{self.current_session_id}.json"), "r")):
+                    self.chat_display.insert("end", f"{'👤 You' if msg['type'] == 'human' else '🤖 Agent'}:\n{self.format_ui_text(msg['data']['content'])}\n\n")
+            except: pass
+        self.chat_display.configure(state="disabled"); self.chat_display.see("end")
+
+    def start_new_session(self):
+        new_id, ts = str(uuid.uuid4()), datetime.datetime.now().strftime("%b %d, %H:%M")
+        self.session_history.append({"id": new_id, "timestamp": ts, "title": f"Chat {ts}"})
+        self.current_session_id = new_id; self.save_current_state(); self.update_sidebar_history(); self.load_active_chat_to_display()
+
+    # ==========================================
+    # 5. THE OPTIMIZED MULTI-AGENT BRAIN TRUST
+    # ==========================================
+    def setup_ai(self):
+        self.api_key = os.environ.get("OPENROUTER_API_KEY")
+        self.researcher_engine = ChatOpenAI(base_url="[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)", api_key=self.api_key, model="google/gemma-3-27b-it:free", max_retries=2, timeout=45.0).with_fallbacks([ChatOpenAI(base_url="[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)", api_key=self.api_key, model="mistralai/mistral-small-3.1-24b:free", max_retries=2)])
+        self.editor_engine = ChatOpenAI(base_url="[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)", api_key=self.api_key, model="meta-llama/llama-3.3-70b-instruct:free", streaming=True, max_retries=2, timeout=60.0).with_fallbacks([ChatOpenAI(base_url="[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)", api_key=self.api_key, model="openrouter/auto", streaming=True, max_retries=2)])
+        self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        self.after(0, lambda: self.status_indicator.configure(text="🟢 Dual-Agent Core Ready"))
+
+    def get_cached_vectorstore(self):
+        # The v4.3 Engine Optimization: Only rebuild if files changed!
+        current_hash = str(sorted(os.listdir(SOURCE_DIR)))
+        if self.cached_vectorstore is not None and self.cached_docs_hash == current_hash:
+            return self.cached_vectorstore
+
+        self.after(0, lambda: self.status_indicator.configure(text="🔄 Caching Knowledge Base... (This happens once)"))
+        docs = []
+        for f in os.listdir(SOURCE_DIR):
+            path = os.path.join(SOURCE_DIR, f)
+            try:
+                if f.lower().endswith(".pdf"): docs.extend(PyMuPDFLoader(path).load())
+                elif f.lower().endswith(".txt"): docs.extend(TextLoader(path, encoding="utf-8").load())
+                elif f.lower().endswith(".docx"): docs.extend(Docx2txtLoader(path).load())
+            except Exception as e: print(f"Failed to load {f}: {e}")
+        
+        if docs:
+            splits = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200).split_documents(docs)
+            self.cached_vectorstore = FAISS.from_documents(splits, self.embeddings)
+            self.cached_docs_hash = current_hash
+            return self.cached_vectorstore
+        
+        self.cached_vectorstore = None
+        self.cached_docs_hash = current_hash
+        return None
+
+    def send_message(self):
+        query = self.user_input.get().strip()
+        if not query: return
+        self.user_input.delete(0, "end"); self.user_input.configure(state="disabled"); self.send_btn.configure(state="disabled")
+        self.append_chat_to_ui(f"👤 You:\n{query}\n\n")
+        threading.Thread(target=self.run_agentic_workflow, args=(query,), daemon=True).start()
+
+    def run_agentic_workflow(self, query):
+        try:
+            vs = self.get_cached_vectorstore()
+            context = "\n\n".join([d.page_content for d in vs.as_retriever(search_kwargs={"k": 5}).invoke(query)]) if vs else "No documents provided."
+
+            history_obj = FileChatMessageHistory(os.path.join(HISTORY_DIR, f"{self.current_session_id}.json"))
+            history_text = "\n".join([f"{'User' if m.type == 'human' else 'Agent'}: {m.content}" for m in history_obj.messages[-4:]])
+
+            self.after(0, lambda: self.status_indicator.configure(text="🧠 Researcher AI analyzing..."))
+            try: researcher_draft = self.researcher_engine.invoke(f"You are a strict Researcher. User: {self.user_name}\nContext: {context}\nHistory: {history_text}\nQuestion: {query}\nCRITICAL: Answer ONLY using facts in the Context. If not there, reply EXACTLY: [NO_DATA].").content
+            except Exception as e: researcher_draft = f"[NO_DATA] Error: {e}"
+
+            self.after(0, lambda: self.status_indicator.configure(text="✨ Editor AI perfecting..."))
+            self.after(0, lambda: self.chat_display.configure(state="normal")); self.after(0, lambda: self.chat_display.insert("end", "🤖 Agent:\n"))
+            
+            full_final_response = ""
+            for chunk in self.editor_engine.stream(f"You are an Editor assisting {self.user_name}. Researcher Data: {researcher_draft}\nTask: 1. Format beautifully to answer '{query}'. 2. If data is [NO_DATA], state: '⚠️ *[ Note: Not in provided documents ]*' at the top, then answer using general knowledge."):
+                full_final_response += chunk.content
+                self.after(0, lambda t=self.format_ui_text(chunk.content): self.chat_display.insert("end", t)); self.after(0, lambda: self.chat_display.see("end"))
+
+            history_obj.add_user_message(query); history_obj.add_ai_message(full_final_response)
+            self.after(0, lambda: self.chat_display.insert("end", "\n\n")); self.after(0, lambda: self.chat_display.configure(state="disabled")); self.after(0, lambda: self.status_indicator.configure(text="🟢 Dual-Agent Core Ready"))
+
+        except Exception as e:
+            self.after(0, lambda: self.append_chat_to_ui(f"⚙️ Error: {str(e)}\n\n")); self.after(0, lambda: self.status_indicator.configure(text="❌ Agent Failure"))
+            
+        self.after(0, lambda: self.user_input.configure(state="normal")); self.after(0, lambda: self.send_btn.configure(state="normal")); self.after(0, lambda: self.user_input.focus_set())
+
+    def append_chat_to_ui(self, text):
+        self.chat_display.configure(state="normal"); self.chat_display.insert("end", text); self.chat_display.configure(state="disabled"); self.chat_display.see("end")
+
+    # ==========================================
+    # 6. WORKSPACE LOGIC & BULK DELETE UI
+    # ==========================================
+    def upload_files(self):
+        if files := filedialog.askopenfilenames():
+            self.status_indicator.configure(text="📥 Ingesting Files...")
+            for f in files: shutil.copy(f, SOURCE_DIR)
+            self.update_source_list()
+            self.cached_vectorstore = None # Force cache refresh on next message
+            self.status_indicator.configure(text="🟢 Dual-Agent Core Ready")
+
+    def update_source_list(self):
+        for w in self.source_list.winfo_children(): w.destroy()
+        for f in os.listdir(SOURCE_DIR): ctk.CTkLabel(self.source_list, text=f"• {f}", font=(FONT_MAIN, 12)).pack(anchor="w", padx=5)
+
+    def open_manage_sources_menu(self):
+        files = os.listdir(SOURCE_DIR)
+        if not files:
+            self.show_notification("⚠️ No files to delete.", is_alert=True, duration=3000)
+            return
+
+        win = ctk.CTkToplevel(self)
+        win.title("Manage Sources")
+        win.geometry("400x500")
+        win.attributes("-topmost", True)
+        win.grab_set()
+
+        ctk.CTkLabel(win, text="Select files to delete:", font=(FONT_MAIN, 16, "bold")).pack(pady=15)
+        
+        scroll = ctk.CTkScrollableFrame(win, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=20, pady=10)
+        
+        checkboxes = {}
+        for f in files:
+            var = tk.BooleanVar(value=False)
+            cb = ctk.CTkCheckBox(scroll, text=f, variable=var, text_color=TEXT_MAIN, fg_color=ACCENT_PRIMARY, hover_color=ACCENT_HOVER)
+            cb.pack(anchor="w", pady=5)
+            checkboxes[f] = var
+            
+        def confirm_delete():
+            deleted_count = 0
+            for f, var in checkboxes.items():
+                if var.get():
+                    try:
+                        os.remove(os.path.join(SOURCE_DIR, f))
+                        deleted_count += 1
+                    except: pass
+            
+            if deleted_count > 0:
+                self.update_source_list()
+                self.cached_vectorstore = None # CRITICAL: Forces AI to forget deleted files
+                self.show_notification(f"🗑️ Removed {deleted_count} file(s)", duration=3000)
+            win.destroy()
+
+        ctk.CTkButton(win, text="Delete Selected", fg_color="#e74c3c", hover_color="#c0392b", command=confirm_delete).pack(pady=20)
+
+if __name__ == "__main__":
+    ChatApp().mainloop()
