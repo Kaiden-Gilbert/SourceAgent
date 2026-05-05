@@ -1,4 +1,4 @@
 {
-  "version": "4.3",
-  "changelog": "Optimised the whole engine and finished the delete sources button."
+  "version": "4.4",
+  "changelog": "Complete rewrite of the engine to add more customisation features and optimisation."
 }
