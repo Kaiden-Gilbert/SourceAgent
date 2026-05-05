@@ -30,7 +30,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 
 # --- APP CONFIGURATION ---
-APP_VERSION = "4.6" 
+APP_VERSION = "4.6.1" # The 404 Endpoint Patch
 GITHUB_RAW_BASE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/"
 
 # --- UI SETTINGS ---
@@ -45,38 +45,38 @@ FONT_MAIN = "Segoe UI"
 class ChatApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"SourceAgent Pro v{APP_VERSION} - Live Cloud Sync")
+        self.title(f"SourceAgent Pro v{APP_VERSION} - Dual-Agent Verified")
         self.geometry("1300x850")
         
         self.cached_vectorstore = None
         self.cached_docs_hash = ""
-        self.update_alert_shown = False # Prevent spamming alerts
+        self.update_alert_shown = False 
         
         self.load_save_data()
         ctk.set_appearance_mode(self.app_theme)
+        
+        # Initialize Deep Space Nebula
         self.draw_dynamic_background()
 
         if self.user_name: self.show_welcome_back_screen()
         else: self.show_boot_screen()
 
-        # START THE REAL-TIME PING ENGINE
+        # Start Background Cloud Heartbeat
         self.start_cloud_heartbeat()
 
     # ==========================================
-    # 0. REAL-TIME CLOUD HEARTBEAT
+    # 0. REAL-TIME HEARTBEAT (Every 5 Mins)[cite: 1]
     # ==========================================
     def start_cloud_heartbeat(self):
-        # Initial check after 5 seconds, then every 5 minutes
         self.after(5000, self.perform_background_ping)
 
     def perform_background_ping(self):
         if not self.update_alert_shown:
             threading.Thread(target=self.check_for_updates, kwargs={"manual": False}, daemon=True).start()
-        # Schedule next ping in 5 minutes (300,000 ms)
         self.after(300000, self.perform_background_ping)
 
     # ==========================================
-    # 1. VISUAL ENGINE (NEBULA)
+    # 1. VISUAL NEBULA ENGINE[cite: 1]
     # ==========================================
     def draw_dynamic_background(self):
         self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg="#020205")
@@ -103,32 +103,7 @@ class ChatApp(ctk.CTk):
         self.after(40, self.animate_bg)
 
     # ==========================================
-    # 2. UPDATE SYSTEM
-    # ==========================================
-    def check_for_updates(self, manual=False):
-        try:
-            req = urllib.request.Request(GITHUB_RAW_BASE_URL + "version.json", headers={'Cache-Control': 'no-cache'})
-            with urllib.request.urlopen(req, timeout=5) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                cloud_v = float(data.get("app_version", 0.0))
-            
-            if cloud_v > float(APP_VERSION):
-                if manual: self.update_status_lbl.configure(text=f"New version v{cloud_v} found!", text_color="#2ecc71")
-                else: 
-                    self.update_alert_shown = True
-                    self.after(0, lambda: self.show_notification(f"🚀 Live Update Detected: v{cloud_v} is ready!"))
-            else:
-                if manual: self.update_status_lbl.configure(text="System up to date.", text_color=TEXT_MUTED)
-        except: pass
-
-    def show_notification(self, msg):
-        banner = ctk.CTkFrame(self, fg_color=ACCENT_PRIMARY, corner_radius=12)
-        banner.place(relx=0.5, rely=0.06, anchor="center")
-        ctk.CTkLabel(banner, text=msg, font=(FONT_MAIN, 13, "bold"), text_color="white").pack(side="left", padx=20, pady=12)
-        ctk.CTkButton(banner, text="Dismiss", width=60, fg_color="transparent", border_color="white", border_width=1, command=banner.destroy).pack(side="right", padx=15)
-
-    # ==========================================
-    # 3. ANTI-HALLUCINATION WORKFLOW
+    # 2. ANTI-HALLUCINATION WORKFLOW[cite: 1]
     # ==========================================
     def run_agentic_workflow(self, query):
         try:
@@ -139,17 +114,17 @@ class ChatApp(ctk.CTk):
                 relevant_docs = vs.as_retriever(search_kwargs={"k": 5}).invoke(query)
                 context = "\n\n".join([f"[Doc: {d.metadata.get('source')}] {d.page_content}" for d in relevant_docs])
 
-            # STAGE 1: THE RESEARCHER (Fact Extractor)
-            self.after(0, lambda: self.status_indicator.configure(text="🧠 Verifying Facts (No-Hallucination)...", text_color="#2ecc71"))
-            facts = self.researcher_engine.invoke(f"Extract raw facts from: {context}\nTo answer: {query}\nIf not found, say [NO_DATA].").content
+            # STAGE 1: THE RESEARCHER (Fact Extractor) - NO HALUCINATIONS[cite: 1]
+            self.after(0, lambda: self.status_indicator.configure(text="🧠 Verifying Facts (Gemma 3 Optimized)...", text_color="#2ecc71"))
+            facts = self.researcher_engine.invoke(f"Strictly extract facts from: {context}\nTo answer query: {query}\nIf not in text, reply: [INSUFFICIENT_DATA].").content
 
-            # STAGE 2: THE EDITOR (Final Polish)
+            # STAGE 2: THE EDITOR (Final Polish)[cite: 1]
             self.after(0, lambda: self.status_indicator.configure(text="✨ Streaming Grounded Response...", text_color="#ffffff"))
             self.after(0, lambda: self.chat_display.configure(state="normal"))
             self.after(0, lambda: self.chat_display.insert("end", "🤖 Agent:\n"))
             
             full_resp = ""
-            for chunk in self.editor_engine.stream(f"Answer query: {query}\nUse ONLY these verified facts: {facts}\nIf facts say [NO_DATA], inform the user honestly."):
+            for chunk in self.editor_engine.stream(f"User Query: {query}\nVerified Data: {facts}\nTask: Answer using only verified data. If [INSUFFICIENT_DATA], explain that the documents don't have this info."):
                 token = self.format_ui_text(chunk.content)
                 full_resp += chunk.content
                 self.after(0, lambda t=token: self.chat_display.insert("end", t))
@@ -160,12 +135,45 @@ class ChatApp(ctk.CTk):
 
             self.after(0, lambda: self.chat_display.insert("end", "\n\n"))
             self.after(0, lambda: self.chat_display.configure(state="disabled"))
-            self.after(0, lambda: self.status_indicator.configure(text="🟢 System Ready", text_color=TEXT_MUTED))
+            self.after(0, lambda: self.status_indicator.configure(text="🟢 Source-Grounded Core Ready", text_color=TEXT_MUTED))
         except Exception as e:
             self.after(0, lambda: self.status_indicator.configure(text=f"❌ Error: {str(e)}", text_color="#e74c3c"))
         self.after(0, lambda: self.user_input.configure(state="normal"))
 
-    # --- STANDARD APP METHODS (HISTORY, UI BUILDER, ETC) ---
+    # ==========================================
+    # 3. AI & SYSTEM SETUP
+    # ==========================================
+    def setup_ai(self):
+        self.api_key = os.environ.get("OPENROUTER_API_KEY")
+        # FIXED: Swapped Llama 3.1 405B for Gemma 3 to resolve 404 Endpoint Error
+        self.researcher_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="google/gemma-3-27b-it:free")
+        self.editor_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="meta-llama/llama-3.3-70b-instruct:free", streaming=True)
+        self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+    def check_for_updates(self, manual=False):
+        try:
+            req = urllib.request.Request(GITHUB_RAW_BASE_URL + "version.json", headers={'Cache-Control': 'no-cache'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                cloud_v = float(data.get("app_version", 0.0))
+            if cloud_v > float(APP_VERSION):
+                if manual: self.update_status_lbl.configure(text=f"Update v{cloud_v} found!", text_color="#2ecc71")
+                else: 
+                    self.update_alert_shown = True
+                    self.after(0, lambda: self.show_notification(f"🚀 Live Update Detected: v{cloud_v} is ready!"))
+            elif manual:
+                self.update_status_lbl.configure(text="System up to date.", text_color=TEXT_MUTED)
+        except: pass
+
+    # ==========================================
+    # 4. WORKSPACE & UI UTILS
+    # ==========================================
+    def show_notification(self, msg):
+        banner = ctk.CTkFrame(self, fg_color=ACCENT_PRIMARY, corner_radius=12)
+        banner.place(relx=0.5, rely=0.06, anchor="center")
+        ctk.CTkLabel(banner, text=msg, font=(FONT_MAIN, 13, "bold"), text_color="white").pack(side="left", padx=20, pady=12)
+        ctk.CTkButton(banner, text="Dismiss", width=60, fg_color="transparent", border_color="white", border_width=1, command=banner.destroy).pack(side="right", padx=15)
+
     def load_save_data(self):
         self.user_name, self.current_session_id, self.session_history, self.app_theme = None, str(uuid.uuid4()), [], "Dark"
         if os.path.exists(SAVE_FILE):
@@ -178,14 +186,13 @@ class ChatApp(ctk.CTk):
         json.dump({"user_name": self.user_name, "session_id": self.current_session_id, "history_list": self.session_history, "app_theme": self.app_theme}, open(SAVE_FILE, "w"), indent=4)
 
     def show_boot_screen(self):
-        self.boot_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.boot_frame.pack(fill="both", expand=True)
+        self.boot_frame = ctk.CTkFrame(self, fg_color="transparent"); self.boot_frame.pack(fill="both", expand=True)
         box = ctk.CTkFrame(self.boot_frame, fg_color=BG_SURFACE, corner_radius=20, border_width=1, border_color="#1a1a2e")
         box.place(relx=0.5, rely=0.5, anchor="center")
         ctk.CTkLabel(box, text="SourceAgent Pro", font=(FONT_MAIN, 32, "bold"), text_color=ACCENT_PRIMARY).pack(pady=(50, 10), padx=60)
-        self.name_entry = ctk.CTkEntry(box, placeholder_text="Name...", width=320, height=50)
+        self.name_entry = ctk.CTkEntry(box, placeholder_text="Identify...", width=320, height=50)
         self.name_entry.pack(pady=35, padx=50)
-        ctk.CTkButton(box, text="Connect", height=45, command=self.first_time_launch).pack(pady=(0, 50))
+        ctk.CTkButton(box, text="Sync Identity", height=45, command=self.first_time_launch).pack(pady=(0, 50))
 
     def first_time_launch(self):
         if self.name_entry.get().strip(): self.user_name = self.name_entry.get().strip(); self.save_current_state()
@@ -193,7 +200,7 @@ class ChatApp(ctk.CTk):
 
     def show_welcome_back_screen(self):
         f = ctk.CTkFrame(self, fg_color="transparent"); f.pack(fill="both", expand=True)
-        ctk.CTkLabel(f, text=f"Welcome back, {self.user_name}.", font=(FONT_MAIN, 42, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
+        ctk.CTkLabel(f, text=f"Grounded System Ready, {self.user_name}.", font=(FONT_MAIN, 42, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
         self.after(1500, lambda: [f.destroy(), self.launch_workspace()])
 
     def launch_workspace(self):
@@ -221,16 +228,10 @@ class ChatApp(ctk.CTk):
         self.status_indicator.grid(row=1, column=0, sticky="w", padx=20, pady=(0,8))
         
         w_in = ctk.CTkFrame(self.chat_container, fg_color="#050508", corner_radius=12); w_in.grid(row=2, column=0, sticky="ew", padx=15, pady=15); w_in.grid_columnconfigure(0, weight=1)
-        self.user_input = ctk.CTkEntry(w_in, placeholder_text="Ask...", height=60, border_width=0, fg_color="transparent")
+        self.user_input = ctk.CTkEntry(w_in, placeholder_text="Ask the brain trust...", height=60, border_width=0, fg_color="transparent")
         self.user_input.grid(row=0, column=0, sticky="ew", padx=15); self.user_input.bind("<Return>", lambda e: self.send_message())
         ctk.CTkButton(w_in, text="Send", width=90, command=self.send_message).grid(row=0, column=1, padx=10)
         self.update_sidebar_history(); self.update_source_list(); self.load_active_chat_to_display()
-
-    def setup_ai(self):
-        self.api_key = os.environ.get("OPENROUTER_API_KEY")
-        self.researcher_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="meta-llama/llama-3.1-405b-instruct:free")
-        self.editor_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="meta-llama/llama-3.3-70b-instruct:free", streaming=True)
-        self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
     def get_cached_vectorstore(self):
         h = str(sorted(os.listdir(SOURCE_DIR)))
@@ -297,9 +298,9 @@ class ChatApp(ctk.CTk):
 
     def open_settings_menu(self):
         win = ctk.CTkToplevel(self); win.title("Settings"); win.geometry("350x250"); win.attributes("-topmost", True)
-        ctk.CTkLabel(win, text="Build v4.6", font=(FONT_MAIN, 18)).pack(pady=20)
-        self.update_status_lbl = ctk.CTkLabel(win, text="Checking Cloud...", text_color=TEXT_MUTED); self.update_status_lbl.pack()
-        ctk.CTkButton(win, text="Force Check", command=lambda: self.check_for_updates(True)).pack(pady=10)
+        ctk.CTkLabel(win, text="Build v4.6.1", font=(FONT_MAIN, 18)).pack(pady=20)
+        self.update_status_lbl = ctk.CTkLabel(win, text="Cloud Status: Stable", text_color=TEXT_MUTED); self.update_status_lbl.pack()
+        ctk.CTkButton(win, text="Force Heartbeat", command=lambda: self.check_for_updates(True)).pack(pady=10)
 
 if __name__ == "__main__":
     ChatApp().mainloop()
