@@ -1,0 +1,5 @@
+chat_storage/
+source_docs/
+.env
+.venv/
+config.json
