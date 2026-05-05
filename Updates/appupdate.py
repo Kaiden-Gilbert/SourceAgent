@@ -30,7 +30,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 
 # --- APP CONFIGURATION ---
-APP_VERSION = "4.1" # BUMPED VERSION TO PROVE IT WORKED!
+APP_VERSION = "4.2" 
 GITHUB_RAW_BASE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/"
 
 # --- UI SETTINGS ---
@@ -51,8 +51,7 @@ def interpolate_color(color1, color2, factor):
 class ChatApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        # NEW TITLE TO PROVE OTA SUCCESS
-        self.title(f"SourceAgent Pro v{APP_VERSION} - OTA Success Edition!")
+        self.title(f"SourceAgent Pro v{APP_VERSION} - Multi-Agent Edition")
         self.geometry("1300x850")
         
         self.load_save_data()
@@ -64,6 +63,26 @@ class ChatApp(ctk.CTk):
 
         threading.Thread(target=self.check_for_updates, daemon=True).start()
 
+    # ==========================================
+    # 0. UNIVERSAL NOTIFICATION SYSTEM
+    # ==========================================
+    def show_notification(self, message, is_alert=False, duration=None):
+        if hasattr(self, 'active_notification') and self.active_notification.winfo_exists():
+            self.active_notification.destroy()
+            
+        bg_color = "#e74c3c" if is_alert else ACCENT_PRIMARY
+        self.active_notification = ctk.CTkFrame(self, fg_color=bg_color, corner_radius=8, border_width=1, border_color="#ffffff")
+        self.active_notification.place(relx=0.5, rely=0.06, anchor="center")
+        
+        ctk.CTkLabel(self.active_notification, text=message, font=(FONT_MAIN, 13, "bold"), text_color="white").pack(side="left", padx=(20, 10), pady=10)
+        ctk.CTkButton(self.active_notification, text="Dismiss", width=60, fg_color="transparent", border_color="white", border_width=1, text_color="white", hover_color=ACCENT_HOVER, command=self.active_notification.destroy).pack(side="right", padx=(0, 20), pady=10)
+        
+        if duration:
+            self.after(duration, lambda: self.active_notification.destroy() if self.active_notification.winfo_exists() else None)
+
+    # ==========================================
+    # 1. SETTINGS & CLOUD RADAR
+    # ==========================================
     def open_settings_menu(self):
         self.settings_win = ctk.CTkToplevel(self)
         self.settings_win.title("Settings")
@@ -98,18 +117,15 @@ class ChatApp(ctk.CTk):
                 cloud_version = float(json.loads(response.read().decode('utf-8')).get("version", 0.0))
             if cloud_version > float(APP_VERSION):
                 if manual and hasattr(self, 'update_status_lbl'): self.update_status_lbl.configure(text=f"Update v{cloud_version} found! Restart app.", text_color="#2ecc71")
-                else: self.after(3000, lambda: self.show_update_notification(cloud_version))
+                else: self.after(3000, lambda: self.show_notification(f"🚀 Update Available: v{cloud_version} found! Close and restart the app to install."))
             else:
                 if manual and hasattr(self, 'update_status_lbl'): self.update_status_lbl.configure(text="You are on the latest version.", text_color=TEXT_MUTED)
         except Exception as e:
             if manual and hasattr(self, 'update_status_lbl'): self.update_status_lbl.configure(text="Cloud server unreachable.", text_color="#e74c3c")
 
-    def show_update_notification(self, latest_version):
-        self.update_banner = ctk.CTkFrame(self, fg_color=ACCENT_PRIMARY, corner_radius=8, border_width=1, border_color="#ffffff")
-        self.update_banner.place(relx=0.5, rely=0.06, anchor="center")
-        ctk.CTkLabel(self.update_banner, text=f"🚀 Update Available: v{latest_version} found! Close and restart to install.", font=(FONT_MAIN, 13, "bold"), text_color="white").pack(side="left", padx=(20, 10), pady=10)
-        ctk.CTkButton(self.update_banner, text="Dismiss", width=60, fg_color="transparent", border_color="white", border_width=1, text_color="white", hover_color=ACCENT_HOVER, command=self.update_banner.destroy).pack(side="right", padx=(0, 20), pady=10)
-
+    # ==========================================
+    # 2. DATA PERSISTENCE
+    # ==========================================
     def load_save_data(self):
         self.user_name, self.current_session_id, self.session_history, self.app_theme = None, str(uuid.uuid4()), [], "Dark"
         if os.path.exists(SAVE_FILE):
@@ -170,6 +186,9 @@ class ChatApp(ctk.CTk):
         self.build_main_ui()
         threading.Thread(target=self.setup_ai, daemon=True).start()
 
+    # ==========================================
+    # 3. MAIN UI
+    # ==========================================
     def build_main_ui(self):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
         self.sidebar = ctk.CTkFrame(self, width=320, corner_radius=0, fg_color=BG_SIDEBAR)
@@ -204,6 +223,9 @@ class ChatApp(ctk.CTk):
 
         self.update_sidebar_history(); self.update_source_list(); self.load_active_chat_to_display()
 
+    # ==========================================
+    # 4. CHAT HISTORY & RENAMING LOGIC
+    # ==========================================
     def format_ui_text(self, text):
         for rep in [("**", ""), ("* ", "• "), ("- ", "• "), ("### ", ""), ("## ", ""), ("# ", "")]: text = text.replace(*rep)
         return text
@@ -211,7 +233,26 @@ class ChatApp(ctk.CTk):
     def update_sidebar_history(self):
         for w in self.history_list.winfo_children(): w.destroy()
         for entry in reversed(self.session_history):
-            ctk.CTkButton(self.history_list, text=entry['title'], anchor="w", fg_color="transparent", text_color=TEXT_MAIN, hover_color="#222", command=lambda sid=entry['id']: self.switch_to_session(sid)).pack(fill="x", pady=2)
+            frame = ctk.CTkFrame(self.history_list, fg_color="transparent")
+            frame.pack(fill="x", pady=2)
+            
+            btn = ctk.CTkButton(frame, text=entry['title'], anchor="w", fg_color="transparent", text_color=TEXT_MAIN, hover_color="#222", command=lambda sid=entry['id']: self.switch_to_session(sid))
+            btn.pack(side="left", fill="x", expand=True)
+            
+            edit_btn = ctk.CTkButton(frame, text="✏️", width=25, fg_color="transparent", hover_color="#333", command=lambda sid=entry['id']: self.rename_chat(sid))
+            edit_btn.pack(side="right", padx=2)
+
+    def rename_chat(self, sid):
+        dialog = ctk.CTkInputDialog(text="Enter new chat name:", title="Rename Session")
+        new_title = dialog.get_input()
+        if new_title and new_title.strip():
+            for entry in self.session_history:
+                if entry['id'] == sid:
+                    entry['title'] = new_title.strip()
+                    break
+            self.save_current_state()
+            self.update_sidebar_history()
+            self.show_notification(f"✏️ Chat renamed to '{new_title.strip()}'", duration=3000)
 
     def switch_to_session(self, sid):
         self.current_session_id = sid; self.save_current_state(); self.load_active_chat_to_display()
@@ -230,6 +271,9 @@ class ChatApp(ctk.CTk):
         self.session_history.append({"id": new_id, "timestamp": ts, "title": f"Chat {ts}"})
         self.current_session_id = new_id; self.save_current_state(); self.update_sidebar_history(); self.load_active_chat_to_display()
 
+    # ==========================================
+    # 5. THE MULTI-AGENT BRAIN TRUST
+    # ==========================================
     def setup_ai(self):
         self.api_key = os.environ.get("OPENROUTER_API_KEY")
         self.researcher_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="google/gemma-3-27b-it:free", max_retries=2, timeout=45.0).with_fallbacks([ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="mistralai/mistral-small-3.1-24b:free", max_retries=2)])
@@ -285,6 +329,9 @@ class ChatApp(ctk.CTk):
     def append_chat_to_ui(self, text):
         self.chat_display.configure(state="normal"); self.chat_display.insert("end", text); self.chat_display.configure(state="disabled"); self.chat_display.see("end")
 
+    # ==========================================
+    # 6. WORKSPACE LOGIC (WITH DELETE)
+    # ==========================================
     def upload_files(self):
         if files := filedialog.askopenfilenames():
             self.status_indicator.configure(text="📥 Ingesting Files...")
@@ -293,7 +340,20 @@ class ChatApp(ctk.CTk):
 
     def update_source_list(self):
         for w in self.source_list.winfo_children(): w.destroy()
-        for f in os.listdir(SOURCE_DIR): ctk.CTkLabel(self.source_list, text=f"• {f}", font=(FONT_MAIN, 12)).pack(anchor="w", padx=5)
+        for f in os.listdir(SOURCE_DIR): 
+            frame = ctk.CTkFrame(self.source_list, fg_color="transparent")
+            frame.pack(fill="x", pady=2)
+            ctk.CTkLabel(frame, text=f"• {f}", font=(FONT_MAIN, 12)).pack(side="left", padx=5)
+            
+            del_btn = ctk.CTkButton(frame, text="✖", width=20, fg_color="transparent", text_color="#e74c3c", hover_color="#333", command=lambda file=f: self.delete_file(file))
+            del_btn.pack(side="right", padx=5)
+
+    def delete_file(self, filename):
+        path = os.path.join(SOURCE_DIR, filename)
+        if os.path.exists(path): 
+            os.remove(path)
+        self.update_source_list()
+        self.show_notification(f"🗑️ Removed '{filename}'", duration=3000)
 
 if __name__ == "__main__":
     ChatApp().mainloop()
