@@ -1,4 +1,4 @@
 {
-  "version": "4.2",
-  "changelog": "Added a remove sources button and added a notification system to notify you when an update is avaliable!"
+  "version": "4.3",
+  "changelog": "Optimised the whole engine and finished the delete sources button."
 }
