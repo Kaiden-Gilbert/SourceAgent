@@ -1,0 +1,11 @@
+langchain
+langchain-openai
+langchain-community
+langchain-huggingface
+sentence-transformers
+langchain-text-splitters
+python-dotenv
+customtkinter
+pymupdf
+docx2txt
+faiss-cpu
