@@ -1,1 +1,4 @@
-
+{
+  "version": "4.0",
+  "changelog": "Cloud Sync Initialized, Launcher now detects updates."
+}
