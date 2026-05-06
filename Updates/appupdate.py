@@ -1,13 +1,20 @@
 import os, sys, subprocess, time, uuid, threading, json, datetime, urllib.request, math, base64
 import tkinter as tk 
 
-# --- BOOTSTRAP ---
+# --- BOOTSTRAP & AUTO-INSTALLER ---
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 VENV_PYTHON = os.path.join(BASE_DIR, ".venv", "Scripts", "python.exe") if os.name == 'nt' else os.path.join(BASE_DIR, ".venv", "bin", "python")
 
 if sys.executable.lower() != VENV_PYTHON.lower() and os.path.exists(VENV_PYTHON):
     subprocess.Popen([VENV_PYTHON] + sys.argv)
     sys.exit()
+
+# Auto-Install Video Processing Libraries if missing
+try:
+    import cv2
+except ImportError:
+    subprocess.check_call([VENV_PYTHON, "-m", "pip", "install", "opencv-python-headless", "--quiet"])
+    import cv2
 
 import shutil
 import customtkinter as ctk
@@ -29,10 +36,10 @@ from langchain_community.chat_message_histories import FileChatMessageHistory
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_core.messages import HumanMessage # Required for Vision
+from langchain_core.messages import HumanMessage 
 
 # --- APP CONFIGURATION ---
-APP_VERSION = "4.8" # Vision Integration Update
+APP_VERSION = "4.9" # Omni-Vision Update
 GITHUB_RAW_BASE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/"
 
 # --- UI SETTINGS ---
@@ -46,13 +53,13 @@ FONT_MAIN = "Segoe UI"
 class ChatApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"SourceAgent Pro v{APP_VERSION} - Multimodal Edition")
+        self.title(f"SourceAgent Pro v{APP_VERSION} - Omni-Vision Edition")
         self.geometry("1300x850")
         
         self.cached_vectorstore = None
         self.cached_docs_hash = ""
         self.update_alert_shown = False 
-        self.attached_image_path = None # Stores the image waiting to be sent
+        self.attached_media_path = None # Handles both Images AND Videos
         
         self.load_save_data()
         ctk.set_appearance_mode(self.app_theme)
@@ -120,20 +127,40 @@ class ChatApp(ctk.CTk):
         self.bg_canvas.lower("all"); self.after(40, self.animate_bg)
 
     # ==========================================
-    # 2. MULTIMODAL VISION WORKFLOW
+    # 2. OMNI-VISION ENGINE (IMAGE + VIDEO)
     # ==========================================
-    def attach_image(self):
-        """Allows the user to select an image from their computer"""
-        fp = filedialog.askopenfilename(filetypes=[("Images", "*.png;*.jpg;*.jpeg;*.webp")])
+    def attach_media(self):
+        """Allows user to select Images AND Videos"""
+        fp = filedialog.askopenfilename(filetypes=[("Media Files", "*.png;*.jpg;*.jpeg;*.webp;*.mp4;*.avi;*.mov")])
         if fp:
-            self.attached_image_path = fp
-            self.img_attachment_lbl.configure(text=f"📎 Image attached: {os.path.basename(fp)}")
+            self.attached_media_path = fp
+            icon = "🎬" if fp.lower().endswith(('.mp4', '.avi', '.mov')) else "🖼️"
+            self.img_attachment_lbl.configure(text=f"{icon} Attached: {os.path.basename(fp)}")
+
+    def extract_video_keyframes(self, video_path, num_frames=5):
+        """Extracts evenly spaced frames from a video and converts to Base64"""
+        frames_b64 = []
+        cap = cv2.VideoCapture(video_path)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        
+        if total_frames > 0:
+            # Calculate intervals to get beginning, middle, and end frames
+            indices = [int(i * total_frames / num_frames) for i in range(num_frames)]
+            for idx in indices:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                ret, frame = cap.read()
+                if ret:
+                    # Compress frame to save API payload limits
+                    frame = cv2.resize(frame, (512, 512), interpolation=cv2.INTER_AREA)
+                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    frames_b64.append(base64.b64encode(buffer).decode('utf-8'))
+        cap.release()
+        return frames_b64
 
     def run_agentic_workflow(self, query):
         try:
-            # Check if an image was attached before clearing the path
-            img_path = self.attached_image_path
-            self.attached_image_path = None
+            media_path = self.attached_media_path
+            self.attached_media_path = None
             self.after(0, lambda: self.img_attachment_lbl.configure(text=""))
 
             self.after(0, lambda: self.status_indicator.configure(text="🔍 Searching Knowledge Base...", text_color=ACCENT_PRIMARY))
@@ -151,18 +178,26 @@ class ChatApp(ctk.CTk):
             
             full_resp = ""
             
-            if img_path:
-                self.after(0, lambda: self.status_indicator.configure(text="👁️ Processing Visual Data...", text_color="#e67e22"))
-                # Encode the image to Base64
-                with open(img_path, "rb") as image_file:
-                    b64_img = base64.b64encode(image_file.read()).decode('utf-8')
+            if media_path:
+                ext = media_path.lower().split('.')[-1]
+                content_payload = [{"type": "text", "text": f"User Query: {query}\nVerified Data: {facts}\nTask: Answer using the verified data AND the attached media. If text is [INSUFFICIENT_DATA], rely on the media."}]
                 
-                # Construct a Multimodal LangChain Message
-                vision_prompt = f"User Query: {query}\nVerified Data: {facts}\nTask: Answer using the verified data AND the provided image. If the text says [INSUFFICIENT_DATA], rely on the image."
-                msg = HumanMessage(content=[
-                    {"type": "text", "text": vision_prompt},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
-                ])
+                # --- VIDEO PROCESSING ---
+                if ext in ['mp4', 'avi', 'mov']:
+                    self.after(0, lambda: self.status_indicator.configure(text="🎬 Extracting Video Keyframes...", text_color="#e67e22"))
+                    keyframes = self.extract_video_keyframes(media_path)
+                    for b64 in keyframes:
+                        content_payload.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+                
+                # --- IMAGE PROCESSING ---
+                else:
+                    self.after(0, lambda: self.status_indicator.configure(text="🖼️ Processing Visual Data...", text_color="#e67e22"))
+                    with open(media_path, "rb") as image_file:
+                        b64_img = base64.b64encode(image_file.read()).decode('utf-8')
+                    content_payload.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}})
+                
+                # Send Multimodal Payload
+                msg = HumanMessage(content=content_payload)
                 stream_gen = self.editor_engine.stream([msg])
             else:
                 self.after(0, lambda: self.status_indicator.configure(text="✨ Streaming Grounded Response...", text_color="#ffffff"))
@@ -190,7 +225,6 @@ class ChatApp(ctk.CTk):
     def setup_ai(self):
         self.api_key = os.environ.get("OPENROUTER_API_KEY")
         self.researcher_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="google/gemma-3-27b-it:free")
-        # UPGRADED TO VISION MODEL: Gemini 2.0 Flash handles text + images flawlessly on the free tier.
         self.editor_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="google/gemini-2.0-flash-lite-preview-02-05:free", streaming=True)
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
@@ -220,7 +254,7 @@ class ChatApp(ctk.CTk):
 
     def show_welcome_back_screen(self):
         f = ctk.CTkFrame(self, fg_color="transparent"); f.pack(fill="both", expand=True)
-        ctk.CTkLabel(f, text=f"Vision Optics Online, {self.user_name}.", font=(FONT_MAIN, 42, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
+        ctk.CTkLabel(f, text=f"Omni-Vision Online, {self.user_name}.", font=(FONT_MAIN, 42, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
         self.after(1500, lambda: [f.destroy(), self.launch_workspace()])
 
     def launch_workspace(self):
@@ -235,8 +269,8 @@ class ChatApp(ctk.CTk):
         self.source_list = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent", height=150); self.source_list.pack(fill="x", padx=10, pady=10)
         
         f_btns = ctk.CTkFrame(self.sidebar, fg_color="transparent"); f_btns.pack(fill="x", padx=20, pady=10)
-        ctk.CTkButton(f_btns, text="Upload", width=125, command=self.upload_files, fg_color=BG_SURFACE).pack(side="left", expand=True)
-        ctk.CTkButton(f_btns, text="Manage", width=125, command=self.open_manage_sources_menu, fg_color="transparent", border_width=1, border_color="#e74c3c").pack(side="right", expand=True)
+        ctk.CTkButton(f_btns, text="Upload Docs", width=125, command=self.upload_files, fg_color=BG_SURFACE).pack(side="left", expand=True)
+        ctk.CTkButton(f_btns, text="Manage Docs", width=125, command=self.open_manage_sources_menu, fg_color="transparent", border_width=1, border_color="#e74c3c").pack(side="right", expand=True)
         ctk.CTkButton(self.sidebar, text="Settings", command=self.open_settings_menu, fg_color="transparent", border_width=1).pack(side="bottom", fill="x", padx=20, pady=20)
 
         self.chat_container = ctk.CTkFrame(self, fg_color=BG_SURFACE, corner_radius=15, border_width=1, border_color="#1a1a2e")
@@ -245,7 +279,6 @@ class ChatApp(ctk.CTk):
         self.chat_display = ctk.CTkTextbox(self.chat_container, state="disabled", font=(FONT_MAIN, 16), wrap="word", fg_color="transparent")
         self.chat_display.grid(row=0, column=0, sticky="nsew", padx=15, pady=20)
         
-        # Bottom info row containing status and image attachment indicator
         info_frame = ctk.CTkFrame(self.chat_container, fg_color="transparent")
         info_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0,8))
         self.status_indicator = ctk.CTkLabel(info_frame, text="🟢 System Ready", text_color=TEXT_MUTED, font=(FONT_MAIN, 12, "italic"))
@@ -256,10 +289,10 @@ class ChatApp(ctk.CTk):
         w_in = ctk.CTkFrame(self.chat_container, fg_color="#050508", corner_radius=12); w_in.grid(row=2, column=0, sticky="ew", padx=15, pady=15)
         w_in.grid_columnconfigure(1, weight=1)
         
-        # New Vision "Attach" Button
-        ctk.CTkButton(w_in, text="👁️", width=40, height=40, fg_color="transparent", border_width=1, border_color="#333", text_color="#f8fafc", command=self.attach_image).grid(row=0, column=0, padx=(10, 0))
+        # OMNI-VISION BUTTON
+        ctk.CTkButton(w_in, text="📸", width=40, height=40, fg_color="transparent", border_width=1, border_color="#333", text_color="#f8fafc", command=self.attach_media).grid(row=0, column=0, padx=(10, 0))
         
-        self.user_input = ctk.CTkEntry(w_in, placeholder_text="Ask the brain trust...", height=60, border_width=0, fg_color="transparent")
+        self.user_input = ctk.CTkEntry(w_in, placeholder_text="Ask about your docs or attached media...", height=60, border_width=0, fg_color="transparent")
         self.user_input.grid(row=0, column=1, sticky="ew", padx=10); self.user_input.bind("<Return>", lambda e: self.send_message())
         ctk.CTkButton(w_in, text="Send", width=90, command=self.send_message).grid(row=0, column=2, padx=10)
         
@@ -330,7 +363,7 @@ class ChatApp(ctk.CTk):
 
     def open_settings_menu(self):
         win = ctk.CTkToplevel(self); win.title("Settings"); win.geometry("350x250"); win.attributes("-topmost", True)
-        ctk.CTkLabel(win, text="Build v4.8", font=(FONT_MAIN, 18)).pack(pady=20)
+        ctk.CTkLabel(win, text="Build v4.9", font=(FONT_MAIN, 18)).pack(pady=20)
         self.update_status_lbl = ctk.CTkLabel(win, text="Cloud Status: Monitored", text_color=TEXT_MUTED); self.update_status_lbl.pack()
         ctk.CTkButton(win, text="Force Heartbeat", command=lambda: self.check_for_updates(True)).pack(pady=10)
 
