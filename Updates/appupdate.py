@@ -18,6 +18,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
 SAVE_FILE = os.path.join(BASE_DIR, "config.json")
 HISTORY_DIR = os.path.join(BASE_DIR, "chat_storage") 
+LAUNCHER_FILE = os.path.join(BASE_DIR, "launcher.py") # Required for the Handoff
 
 for d in [SOURCE_DIR, HISTORY_DIR]:
     if not os.path.exists(d): os.makedirs(d)
@@ -30,7 +31,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 
 # --- APP CONFIGURATION ---
-APP_VERSION = "4.6.1" # The 404 Endpoint Patch
+APP_VERSION = "4.7" # In-App Update Handoff Edition
 GITHUB_RAW_BASE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/"
 
 # --- UI SETTINGS ---
@@ -45,7 +46,7 @@ FONT_MAIN = "Segoe UI"
 class ChatApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"SourceAgent Pro v{APP_VERSION} - Dual-Agent Verified")
+        self.title(f"SourceAgent Pro v{APP_VERSION} - Live Handoff System")
         self.geometry("1300x850")
         
         self.cached_vectorstore = None
@@ -55,17 +56,60 @@ class ChatApp(ctk.CTk):
         self.load_save_data()
         ctk.set_appearance_mode(self.app_theme)
         
-        # Initialize Deep Space Nebula
+        # Deep Space Nebula Animation
         self.draw_dynamic_background()
 
         if self.user_name: self.show_welcome_back_screen()
         else: self.show_boot_screen()
 
-        # Start Background Cloud Heartbeat
         self.start_cloud_heartbeat()
 
     # ==========================================
-    # 0. REAL-TIME HEARTBEAT (Every 5 Mins)[cite: 1]
+    # 0. IN-APP UPDATE HANDOFF PROTOCOL
+    # ==========================================
+    def trigger_handoff(self):
+        """Silently launches the bootloader and kills the main app to allow overwriting."""
+        self.status_indicator.configure(text="🔄 Initiating Handoff Sequence...", text_color="#2ecc71")
+        time.sleep(0.5)
+        
+        # Use the Sandbox Python to ensure dependencies match
+        py_exe = get_venv_python() if 'get_venv_python' in globals() else sys.executable
+        subprocess.Popen([py_exe, LAUNCHER_FILE])
+        
+        self.destroy()
+        sys.exit()
+
+    def show_update_banner(self, new_version):
+        """Interactive banner that allows the user to trigger the update instantly."""
+        banner = ctk.CTkFrame(self, fg_color="#1e1b4b", corner_radius=12, border_width=2, border_color="#6366f1")
+        banner.place(relx=0.5, rely=0.08, anchor="center")
+        
+        ctk.CTkLabel(banner, text=f"🚀 SourceAgent v{new_version} is ready!", font=(FONT_MAIN, 14, "bold"), text_color="white").pack(side="left", padx=(20, 15), pady=15)
+        
+        ctk.CTkButton(banner, text="Update Now", width=100, fg_color="#2ecc71", hover_color="#27ae60", text_color="#050508", font=(FONT_MAIN, 12, "bold"), command=self.trigger_handoff).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(banner, text="Later", width=60, fg_color="transparent", border_color="#64748b", border_width=1, text_color="#64748b", hover_color="#1a1a2e", command=banner.destroy).pack(side="right", padx=(0, 20))
+
+    def check_for_updates(self, manual=False):
+        try:
+            # Aggressive cache strip for real-time accuracy
+            req = urllib.request.Request(
+                GITHUB_RAW_BASE_URL + f"version.json?t={int(time.time())}", 
+                headers={'Cache-Control': 'no-cache, no-store, must-revalidate'}
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                cloud_v = float(data.get("app_version", 0.0))
+                
+            if cloud_v > float(APP_VERSION):
+                if manual: self.update_status_lbl.configure(text=f"Update v{cloud_v} ready!", text_color="#2ecc71")
+                self.update_alert_shown = True
+                self.after(0, lambda: self.show_update_banner(cloud_v))
+            elif manual:
+                self.update_status_lbl.configure(text="System is up to date.", text_color=TEXT_MUTED)
+        except: pass
+
+    # ==========================================
+    # 1. LIVE SYNC HEARTBEAT
     # ==========================================
     def start_cloud_heartbeat(self):
         self.after(5000, self.perform_background_ping)
@@ -73,10 +117,10 @@ class ChatApp(ctk.CTk):
     def perform_background_ping(self):
         if not self.update_alert_shown:
             threading.Thread(target=self.check_for_updates, kwargs={"manual": False}, daemon=True).start()
-        self.after(300000, self.perform_background_ping)
+        self.after(300000, self.perform_background_ping) # Ping every 5 minutes
 
     # ==========================================
-    # 1. VISUAL NEBULA ENGINE[cite: 1]
+    # 2. NEBULA VISUAL ENGINE
     # ==========================================
     def draw_dynamic_background(self):
         self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg="#020205")
@@ -103,7 +147,7 @@ class ChatApp(ctk.CTk):
         self.after(40, self.animate_bg)
 
     # ==========================================
-    # 2. ANTI-HALLUCINATION WORKFLOW[cite: 1]
+    # 3. ANTI-HALLUCINATION WORKFLOW
     # ==========================================
     def run_agentic_workflow(self, query):
         try:
@@ -114,11 +158,9 @@ class ChatApp(ctk.CTk):
                 relevant_docs = vs.as_retriever(search_kwargs={"k": 5}).invoke(query)
                 context = "\n\n".join([f"[Doc: {d.metadata.get('source')}] {d.page_content}" for d in relevant_docs])
 
-            # STAGE 1: THE RESEARCHER (Fact Extractor) - NO HALUCINATIONS[cite: 1]
             self.after(0, lambda: self.status_indicator.configure(text="🧠 Verifying Facts (Gemma 3 Optimized)...", text_color="#2ecc71"))
             facts = self.researcher_engine.invoke(f"Strictly extract facts from: {context}\nTo answer query: {query}\nIf not in text, reply: [INSUFFICIENT_DATA].").content
 
-            # STAGE 2: THE EDITOR (Final Polish)[cite: 1]
             self.after(0, lambda: self.status_indicator.configure(text="✨ Streaming Grounded Response...", text_color="#ffffff"))
             self.after(0, lambda: self.chat_display.configure(state="normal"))
             self.after(0, lambda: self.chat_display.insert("end", "🤖 Agent:\n"))
@@ -141,38 +183,13 @@ class ChatApp(ctk.CTk):
         self.after(0, lambda: self.user_input.configure(state="normal"))
 
     # ==========================================
-    # 3. AI & SYSTEM SETUP
+    # 4. SYSTEM BOOTSTRAP & UI
     # ==========================================
     def setup_ai(self):
         self.api_key = os.environ.get("OPENROUTER_API_KEY")
-        # FIXED: Swapped Llama 3.1 405B for Gemma 3 to resolve 404 Endpoint Error
         self.researcher_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="google/gemma-3-27b-it:free")
         self.editor_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="meta-llama/llama-3.3-70b-instruct:free", streaming=True)
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-
-    def check_for_updates(self, manual=False):
-        try:
-            req = urllib.request.Request(GITHUB_RAW_BASE_URL + "version.json", headers={'Cache-Control': 'no-cache'})
-            with urllib.request.urlopen(req, timeout=5) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                cloud_v = float(data.get("app_version", 0.0))
-            if cloud_v > float(APP_VERSION):
-                if manual: self.update_status_lbl.configure(text=f"Update v{cloud_v} found!", text_color="#2ecc71")
-                else: 
-                    self.update_alert_shown = True
-                    self.after(0, lambda: self.show_notification(f"🚀 Live Update Detected: v{cloud_v} is ready!"))
-            elif manual:
-                self.update_status_lbl.configure(text="System up to date.", text_color=TEXT_MUTED)
-        except: pass
-
-    # ==========================================
-    # 4. WORKSPACE & UI UTILS
-    # ==========================================
-    def show_notification(self, msg):
-        banner = ctk.CTkFrame(self, fg_color=ACCENT_PRIMARY, corner_radius=12)
-        banner.place(relx=0.5, rely=0.06, anchor="center")
-        ctk.CTkLabel(banner, text=msg, font=(FONT_MAIN, 13, "bold"), text_color="white").pack(side="left", padx=20, pady=12)
-        ctk.CTkButton(banner, text="Dismiss", width=60, fg_color="transparent", border_color="white", border_width=1, command=banner.destroy).pack(side="right", padx=15)
 
     def load_save_data(self):
         self.user_name, self.current_session_id, self.session_history, self.app_theme = None, str(uuid.uuid4()), [], "Dark"
@@ -200,7 +217,7 @@ class ChatApp(ctk.CTk):
 
     def show_welcome_back_screen(self):
         f = ctk.CTkFrame(self, fg_color="transparent"); f.pack(fill="both", expand=True)
-        ctk.CTkLabel(f, text=f"Grounded System Ready, {self.user_name}.", font=(FONT_MAIN, 42, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
+        ctk.CTkLabel(f, text=f"Handoff Protocol Ready, {self.user_name}.", font=(FONT_MAIN, 42, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
         self.after(1500, lambda: [f.destroy(), self.launch_workspace()])
 
     def launch_workspace(self):
@@ -298,8 +315,8 @@ class ChatApp(ctk.CTk):
 
     def open_settings_menu(self):
         win = ctk.CTkToplevel(self); win.title("Settings"); win.geometry("350x250"); win.attributes("-topmost", True)
-        ctk.CTkLabel(win, text="Build v4.6.1", font=(FONT_MAIN, 18)).pack(pady=20)
-        self.update_status_lbl = ctk.CTkLabel(win, text="Cloud Status: Stable", text_color=TEXT_MUTED); self.update_status_lbl.pack()
+        ctk.CTkLabel(win, text="Build v4.7", font=(FONT_MAIN, 18)).pack(pady=20)
+        self.update_status_lbl = ctk.CTkLabel(win, text="Cloud Status: Monitored", text_color=TEXT_MUTED); self.update_status_lbl.pack()
         ctk.CTkButton(win, text="Force Heartbeat", command=lambda: self.check_for_updates(True)).pack(pady=10)
 
 if __name__ == "__main__":
