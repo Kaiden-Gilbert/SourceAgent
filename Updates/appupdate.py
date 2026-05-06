@@ -1,4 +1,4 @@
-import os, sys, subprocess, time, uuid, threading, json, datetime, urllib.request, math
+import os, sys, subprocess, time, uuid, threading, json, datetime, urllib.request, math, base64
 import tkinter as tk 
 
 # --- BOOTSTRAP ---
@@ -18,7 +18,7 @@ load_dotenv(os.path.join(BASE_DIR, ".env"))
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
 SAVE_FILE = os.path.join(BASE_DIR, "config.json")
 HISTORY_DIR = os.path.join(BASE_DIR, "chat_storage") 
-LAUNCHER_FILE = os.path.join(BASE_DIR, "launcher.py") # Required for the Handoff
+LAUNCHER_FILE = os.path.join(BASE_DIR, "launcher.py")
 
 for d in [SOURCE_DIR, HISTORY_DIR]:
     if not os.path.exists(d): os.makedirs(d)
@@ -29,16 +29,16 @@ from langchain_community.chat_message_histories import FileChatMessageHistory
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
+from langchain_core.messages import HumanMessage # Required for Vision
 
 # --- APP CONFIGURATION ---
-APP_VERSION = "4.7" # In-App Update Handoff Edition
+APP_VERSION = "4.8" # Vision Integration Update
 GITHUB_RAW_BASE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/"
 
 # --- UI SETTINGS ---
 BG_SIDEBAR = "#050508"    
 BG_SURFACE = "#0f0f1a"    
 ACCENT_PRIMARY = "#6366f1" 
-ACCENT_HOVER = "#4f46e5"  
 TEXT_MAIN = "#f8fafc"     
 TEXT_MUTED = "#64748b"    
 FONT_MAIN = "Segoe UI"
@@ -46,17 +46,16 @@ FONT_MAIN = "Segoe UI"
 class ChatApp(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"SourceAgent Pro v{APP_VERSION} - Live Handoff System")
+        self.title(f"SourceAgent Pro v{APP_VERSION} - Multimodal Edition")
         self.geometry("1300x850")
         
         self.cached_vectorstore = None
         self.cached_docs_hash = ""
         self.update_alert_shown = False 
+        self.attached_image_path = None # Stores the image waiting to be sent
         
         self.load_save_data()
         ctk.set_appearance_mode(self.app_theme)
-        
-        # Deep Space Nebula Animation
         self.draw_dynamic_background()
 
         if self.user_name: self.show_welcome_back_screen()
@@ -68,38 +67,25 @@ class ChatApp(ctk.CTk):
     # 0. IN-APP UPDATE HANDOFF PROTOCOL
     # ==========================================
     def trigger_handoff(self):
-        """Silently launches the bootloader and kills the main app to allow overwriting."""
         self.status_indicator.configure(text="🔄 Initiating Handoff Sequence...", text_color="#2ecc71")
         time.sleep(0.5)
-        
-        # Use the Sandbox Python to ensure dependencies match
         py_exe = get_venv_python() if 'get_venv_python' in globals() else sys.executable
         subprocess.Popen([py_exe, LAUNCHER_FILE])
-        
         self.destroy()
         sys.exit()
 
     def show_update_banner(self, new_version):
-        """Interactive banner that allows the user to trigger the update instantly."""
         banner = ctk.CTkFrame(self, fg_color="#1e1b4b", corner_radius=12, border_width=2, border_color="#6366f1")
         banner.place(relx=0.5, rely=0.08, anchor="center")
-        
         ctk.CTkLabel(banner, text=f"🚀 SourceAgent v{new_version} is ready!", font=(FONT_MAIN, 14, "bold"), text_color="white").pack(side="left", padx=(20, 15), pady=15)
-        
-        ctk.CTkButton(banner, text="Update Now", width=100, fg_color="#2ecc71", hover_color="#27ae60", text_color="#050508", font=(FONT_MAIN, 12, "bold"), command=self.trigger_handoff).pack(side="left", padx=(0, 10))
-        ctk.CTkButton(banner, text="Later", width=60, fg_color="transparent", border_color="#64748b", border_width=1, text_color="#64748b", hover_color="#1a1a2e", command=banner.destroy).pack(side="right", padx=(0, 20))
+        ctk.CTkButton(banner, text="Update Now", width=100, fg_color="#2ecc71", text_color="#050508", font=(FONT_MAIN, 12, "bold"), command=self.trigger_handoff).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(banner, text="Later", width=60, fg_color="transparent", border_color="#64748b", border_width=1, text_color="#64748b", command=banner.destroy).pack(side="right", padx=(0, 20))
 
     def check_for_updates(self, manual=False):
         try:
-            # Aggressive cache strip for real-time accuracy
-            req = urllib.request.Request(
-                GITHUB_RAW_BASE_URL + f"version.json?t={int(time.time())}", 
-                headers={'Cache-Control': 'no-cache, no-store, must-revalidate'}
-            )
+            req = urllib.request.Request(GITHUB_RAW_BASE_URL + f"version.json?t={int(time.time())}", headers={'Cache-Control': 'no-cache, no-store'})
             with urllib.request.urlopen(req, timeout=5) as response:
-                data = json.loads(response.read().decode('utf-8'))
-                cloud_v = float(data.get("app_version", 0.0))
-                
+                cloud_v = float(json.loads(response.read().decode('utf-8')).get("app_version", 0.0))
             if cloud_v > float(APP_VERSION):
                 if manual: self.update_status_lbl.configure(text=f"Update v{cloud_v} ready!", text_color="#2ecc71")
                 self.update_alert_shown = True
@@ -109,48 +95,47 @@ class ChatApp(ctk.CTk):
         except: pass
 
     # ==========================================
-    # 1. LIVE SYNC HEARTBEAT
+    # 1. LIVE SYNC & NEBULA VISUALS
     # ==========================================
     def start_cloud_heartbeat(self):
         self.after(5000, self.perform_background_ping)
 
     def perform_background_ping(self):
-        if not self.update_alert_shown:
-            threading.Thread(target=self.check_for_updates, kwargs={"manual": False}, daemon=True).start()
-        self.after(300000, self.perform_background_ping) # Ping every 5 minutes
+        if not self.update_alert_shown: threading.Thread(target=self.check_for_updates, kwargs={"manual": False}, daemon=True).start()
+        self.after(300000, self.perform_background_ping)
 
-    # ==========================================
-    # 2. NEBULA VISUAL ENGINE
-    # ==========================================
     def draw_dynamic_background(self):
-        self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg="#020205")
-        self.bg_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
-        self.orbs = [
-            self.bg_canvas.create_oval(0, 0, 0, 0, outline="", fill="#1e1b4b"),
-            self.bg_canvas.create_oval(0, 0, 0, 0, outline="", fill="#312e81"),
-            self.bg_canvas.create_oval(0, 0, 0, 0, outline="", fill="#1e1b4b")
-        ]
-        self.anim_step = 0
-        self.animate_bg()
+        self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg="#020205"); self.bg_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
+        self.orbs = [self.bg_canvas.create_oval(0,0,0,0, outline="", fill="#1e1b4b"), self.bg_canvas.create_oval(0,0,0,0, outline="", fill="#312e81"), self.bg_canvas.create_oval(0,0,0,0, outline="", fill="#1e1b4b")]
+        self.anim_step = 0; self.animate_bg()
 
     def animate_bg(self):
         w, h = self.winfo_width(), self.winfo_height()
         if w > 100:
             self.anim_step += 0.012
-            x1 = (math.sin(self.anim_step) * (w/3)) + (w/2)
-            y1 = (math.cos(self.anim_step * 0.7) * (h/3)) + (h/2)
+            x1 = (math.sin(self.anim_step) * (w/3)) + (w/2); y1 = (math.cos(self.anim_step * 0.7) * (h/3)) + (h/2)
             self.bg_canvas.coords(self.orbs[0], x1-500, y1-500, x1+500, y1+500)
-            x2 = (math.cos(self.anim_step * 1.1) * (w/4)) + (w/2)
-            y2 = (math.sin(self.anim_step * 0.8) * (h/4)) + (h/2)
+            x2 = (math.cos(self.anim_step * 1.1) * (w/4)) + (w/2); y2 = (math.sin(self.anim_step * 0.8) * (h/4)) + (h/2)
             self.bg_canvas.coords(self.orbs[1], x2-400, y2-400, x2+400, y2+400)
-        self.bg_canvas.lower("all")
-        self.after(40, self.animate_bg)
+        self.bg_canvas.lower("all"); self.after(40, self.animate_bg)
 
     # ==========================================
-    # 3. ANTI-HALLUCINATION WORKFLOW
+    # 2. MULTIMODAL VISION WORKFLOW
     # ==========================================
+    def attach_image(self):
+        """Allows the user to select an image from their computer"""
+        fp = filedialog.askopenfilename(filetypes=[("Images", "*.png;*.jpg;*.jpeg;*.webp")])
+        if fp:
+            self.attached_image_path = fp
+            self.img_attachment_lbl.configure(text=f"📎 Image attached: {os.path.basename(fp)}")
+
     def run_agentic_workflow(self, query):
         try:
+            # Check if an image was attached before clearing the path
+            img_path = self.attached_image_path
+            self.attached_image_path = None
+            self.after(0, lambda: self.img_attachment_lbl.configure(text=""))
+
             self.after(0, lambda: self.status_indicator.configure(text="🔍 Searching Knowledge Base...", text_color=ACCENT_PRIMARY))
             vs = self.get_cached_vectorstore()
             context = "No documents provided."
@@ -158,15 +143,32 @@ class ChatApp(ctk.CTk):
                 relevant_docs = vs.as_retriever(search_kwargs={"k": 5}).invoke(query)
                 context = "\n\n".join([f"[Doc: {d.metadata.get('source')}] {d.page_content}" for d in relevant_docs])
 
-            self.after(0, lambda: self.status_indicator.configure(text="🧠 Verifying Facts (Gemma 3 Optimized)...", text_color="#2ecc71"))
-            facts = self.researcher_engine.invoke(f"Strictly extract facts from: {context}\nTo answer query: {query}\nIf not in text, reply: [INSUFFICIENT_DATA].").content
+            self.after(0, lambda: self.status_indicator.configure(text="🧠 Verifying Facts...", text_color="#2ecc71"))
+            facts = self.researcher_engine.invoke(f"Extract facts from: {context}\nTo answer query: {query}\nIf not in text, reply: [INSUFFICIENT_DATA].").content
 
-            self.after(0, lambda: self.status_indicator.configure(text="✨ Streaming Grounded Response...", text_color="#ffffff"))
             self.after(0, lambda: self.chat_display.configure(state="normal"))
             self.after(0, lambda: self.chat_display.insert("end", "🤖 Agent:\n"))
             
             full_resp = ""
-            for chunk in self.editor_engine.stream(f"User Query: {query}\nVerified Data: {facts}\nTask: Answer using only verified data. If [INSUFFICIENT_DATA], explain that the documents don't have this info."):
+            
+            if img_path:
+                self.after(0, lambda: self.status_indicator.configure(text="👁️ Processing Visual Data...", text_color="#e67e22"))
+                # Encode the image to Base64
+                with open(img_path, "rb") as image_file:
+                    b64_img = base64.b64encode(image_file.read()).decode('utf-8')
+                
+                # Construct a Multimodal LangChain Message
+                vision_prompt = f"User Query: {query}\nVerified Data: {facts}\nTask: Answer using the verified data AND the provided image. If the text says [INSUFFICIENT_DATA], rely on the image."
+                msg = HumanMessage(content=[
+                    {"type": "text", "text": vision_prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
+                ])
+                stream_gen = self.editor_engine.stream([msg])
+            else:
+                self.after(0, lambda: self.status_indicator.configure(text="✨ Streaming Grounded Response...", text_color="#ffffff"))
+                stream_gen = self.editor_engine.stream(f"User Query: {query}\nVerified Data: {facts}\nTask: Answer using only verified data. If [INSUFFICIENT_DATA], explain that documents don't have this info.")
+
+            for chunk in stream_gen:
                 token = self.format_ui_text(chunk.content)
                 full_resp += chunk.content
                 self.after(0, lambda t=token: self.chat_display.insert("end", t))
@@ -177,18 +179,19 @@ class ChatApp(ctk.CTk):
 
             self.after(0, lambda: self.chat_display.insert("end", "\n\n"))
             self.after(0, lambda: self.chat_display.configure(state="disabled"))
-            self.after(0, lambda: self.status_indicator.configure(text="🟢 Source-Grounded Core Ready", text_color=TEXT_MUTED))
+            self.after(0, lambda: self.status_indicator.configure(text="🟢 System Ready", text_color=TEXT_MUTED))
         except Exception as e:
             self.after(0, lambda: self.status_indicator.configure(text=f"❌ Error: {str(e)}", text_color="#e74c3c"))
         self.after(0, lambda: self.user_input.configure(state="normal"))
 
     # ==========================================
-    # 4. SYSTEM BOOTSTRAP & UI
+    # 3. SYSTEM BOOTSTRAP & UI
     # ==========================================
     def setup_ai(self):
         self.api_key = os.environ.get("OPENROUTER_API_KEY")
         self.researcher_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="google/gemma-3-27b-it:free")
-        self.editor_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="meta-llama/llama-3.3-70b-instruct:free", streaming=True)
+        # UPGRADED TO VISION MODEL: Gemini 2.0 Flash handles text + images flawlessly on the free tier.
+        self.editor_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="google/gemini-2.0-flash-lite-preview-02-05:free", streaming=True)
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
     def load_save_data(self):
@@ -217,7 +220,7 @@ class ChatApp(ctk.CTk):
 
     def show_welcome_back_screen(self):
         f = ctk.CTkFrame(self, fg_color="transparent"); f.pack(fill="both", expand=True)
-        ctk.CTkLabel(f, text=f"Handoff Protocol Ready, {self.user_name}.", font=(FONT_MAIN, 42, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
+        ctk.CTkLabel(f, text=f"Vision Optics Online, {self.user_name}.", font=(FONT_MAIN, 42, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
         self.after(1500, lambda: [f.destroy(), self.launch_workspace()])
 
     def launch_workspace(self):
@@ -241,13 +244,25 @@ class ChatApp(ctk.CTk):
         self.chat_container.grid_rowconfigure(0, weight=1); self.chat_container.grid_columnconfigure(0, weight=1)
         self.chat_display = ctk.CTkTextbox(self.chat_container, state="disabled", font=(FONT_MAIN, 16), wrap="word", fg_color="transparent")
         self.chat_display.grid(row=0, column=0, sticky="nsew", padx=15, pady=20)
-        self.status_indicator = ctk.CTkLabel(self.chat_container, text="🟢 System Ready", text_color=TEXT_MUTED, font=(FONT_MAIN, 12, "italic"))
-        self.status_indicator.grid(row=1, column=0, sticky="w", padx=20, pady=(0,8))
         
-        w_in = ctk.CTkFrame(self.chat_container, fg_color="#050508", corner_radius=12); w_in.grid(row=2, column=0, sticky="ew", padx=15, pady=15); w_in.grid_columnconfigure(0, weight=1)
+        # Bottom info row containing status and image attachment indicator
+        info_frame = ctk.CTkFrame(self.chat_container, fg_color="transparent")
+        info_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0,8))
+        self.status_indicator = ctk.CTkLabel(info_frame, text="🟢 System Ready", text_color=TEXT_MUTED, font=(FONT_MAIN, 12, "italic"))
+        self.status_indicator.pack(side="left")
+        self.img_attachment_lbl = ctk.CTkLabel(info_frame, text="", text_color="#e67e22", font=(FONT_MAIN, 12, "bold"))
+        self.img_attachment_lbl.pack(side="right")
+        
+        w_in = ctk.CTkFrame(self.chat_container, fg_color="#050508", corner_radius=12); w_in.grid(row=2, column=0, sticky="ew", padx=15, pady=15)
+        w_in.grid_columnconfigure(1, weight=1)
+        
+        # New Vision "Attach" Button
+        ctk.CTkButton(w_in, text="👁️", width=40, height=40, fg_color="transparent", border_width=1, border_color="#333", text_color="#f8fafc", command=self.attach_image).grid(row=0, column=0, padx=(10, 0))
+        
         self.user_input = ctk.CTkEntry(w_in, placeholder_text="Ask the brain trust...", height=60, border_width=0, fg_color="transparent")
-        self.user_input.grid(row=0, column=0, sticky="ew", padx=15); self.user_input.bind("<Return>", lambda e: self.send_message())
-        ctk.CTkButton(w_in, text="Send", width=90, command=self.send_message).grid(row=0, column=1, padx=10)
+        self.user_input.grid(row=0, column=1, sticky="ew", padx=10); self.user_input.bind("<Return>", lambda e: self.send_message())
+        ctk.CTkButton(w_in, text="Send", width=90, command=self.send_message).grid(row=0, column=2, padx=10)
+        
         self.update_sidebar_history(); self.update_source_list(); self.load_active_chat_to_display()
 
     def get_cached_vectorstore(self):
@@ -315,7 +330,7 @@ class ChatApp(ctk.CTk):
 
     def open_settings_menu(self):
         win = ctk.CTkToplevel(self); win.title("Settings"); win.geometry("350x250"); win.attributes("-topmost", True)
-        ctk.CTkLabel(win, text="Build v4.7", font=(FONT_MAIN, 18)).pack(pady=20)
+        ctk.CTkLabel(win, text="Build v4.8", font=(FONT_MAIN, 18)).pack(pady=20)
         self.update_status_lbl = ctk.CTkLabel(win, text="Cloud Status: Monitored", text_color=TEXT_MUTED); self.update_status_lbl.pack()
         ctk.CTkButton(win, text="Force Heartbeat", command=lambda: self.check_for_updates(True)).pack(pady=10)
 
