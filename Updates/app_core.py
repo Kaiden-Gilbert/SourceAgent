@@ -13,11 +13,21 @@ from langchain_core.messages import HumanMessage
 from dotenv import load_dotenv
 import cv2
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# --- PATH FIX FOR COMPILED EXECUTABLES ---
+if getattr(sys, 'frozen', False):
+    # If running from the .exe, look in the folder holding the .exe
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    # If running from the terminal
+    BASE_DIR = os.path.abspath(os.path.dirname(__file__)) if '__file__' in globals() else os.getcwd()
+
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
 SAVE_FILE = os.path.join(BASE_DIR, "config.json")
 HISTORY_DIR = os.path.join(BASE_DIR, "chat_storage")
 ENV_FILE = os.path.join(BASE_DIR, ".env")
+
+for d in [SOURCE_DIR, HISTORY_DIR]:
+    if not os.path.exists(d): os.makedirs(d)
 
 load_dotenv(ENV_FILE)
 
@@ -106,6 +116,10 @@ class SourceAgentWorkspace(ctk.CTk):
 
     def setup_ai_failover(self):
         key = os.environ.get("OPENROUTER_API_KEY")
+        if not key:
+            messagebox.showwarning("Missing Credentials", f"Warning: Could not find OPENROUTER_API_KEY in:\n{ENV_FILE}\n\nPlease ensure your .env file is next to the executable.")
+            key = "missing_key" # Prevent the hard crash
+            
         base = "https://openrouter.ai/api/v1"
         r_prim = ChatOpenAI(base_url=base, api_key=key, model="mistralai/mistral-small-3.1-24b:free")
         r_back = ChatOpenAI(base_url=base, api_key=key, model="google/gemma-3-27b-it:free")
@@ -196,6 +210,5 @@ class SourceAgentWorkspace(ctk.CTk):
         for w in self.history_scroll.winfo_children(): w.destroy()
         for item in self.session_history: ctk.CTkButton(self.history_scroll, text=item['title'], fg_color="transparent").pack(fill="x")
 
-# The Core execution trigger
 app = SourceAgentWorkspace()
 app.mainloop()
