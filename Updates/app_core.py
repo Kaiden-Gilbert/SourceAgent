@@ -1,4 +1,4 @@
-import os, sys, threading, time, base64, math, uuid, json
+import os, sys, threading, time, base64, math, uuid, json, shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -9,16 +9,14 @@ from langchain_community.chat_message_histories import FileChatMessageHistory
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
 import cv2
 
 # --- PATH FIX FOR COMPILED EXECUTABLES ---
 if getattr(sys, 'frozen', False):
-    # If running from the .exe, look in the folder holding the .exe
     BASE_DIR = os.path.dirname(sys.executable)
 else:
-    # If running from the terminal
     BASE_DIR = os.path.abspath(os.path.dirname(__file__)) if '__file__' in globals() else os.getcwd()
 
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
@@ -45,7 +43,6 @@ class SourceAgentWorkspace(ctk.CTk):
         ctk.set_appearance_mode("Dark")
         
         self.cached_vectorstore = None
-        self.cached_docs_hash = ""
         self.attached_media_path = None
         self.user_name = None
         self.token_speed = 0
@@ -54,10 +51,12 @@ class SourceAgentWorkspace(ctk.CTk):
         
         self.load_save_data()
         self.setup_ai_failover()
+        self.load_local_vectorstore()
         
         if self.user_name: self.build_main_ui()
         else: self.show_onboarding()
 
+    # --- ONBOARDING ---
     def show_onboarding(self):
         self.onboarding_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.onboarding_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -76,18 +75,27 @@ class SourceAgentWorkspace(ctk.CTk):
             self.onboarding_frame.destroy()
             self.build_main_ui()
 
+    # --- UI BUILDER ---
     def build_main_ui(self):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
         
+        # SIDEBAR
         self.sidebar = ctk.CTkFrame(self, width=300, fg_color=BG_DARK, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         
-        ctk.CTkLabel(self.sidebar, text="📚 SourceAgent", font=("Segoe UI", 22, "bold")).pack(pady=30, padx=20)
+        ctk.CTkLabel(self.sidebar, text="📚 SourceAgent", font=("Segoe UI", 22, "bold")).pack(pady=(30, 10), padx=20)
+        
+        # SOURCE MANAGEMENT
+        ctk.CTkButton(self.sidebar, text="📄 Add Source Document", fg_color="#27ae60", hover_color="#2ecc71", command=self.add_source_document).pack(fill="x", padx=20, pady=(10, 5))
+        self.source_count_lbl = ctk.CTkLabel(self.sidebar, text="0 Sources Loaded", font=("Segoe UI", 11), text_color=TEXT_MUTED)
+        self.source_count_lbl.pack(pady=(0, 20))
+        
+        # SESSION MANAGEMENT
         ctk.CTkButton(self.sidebar, text="+ New Session", fg_color=ACCENT, command=self.start_new_session).pack(fill="x", padx=20, pady=10)
+        self.history_scroll = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent", height=400)
+        self.history_scroll.pack(fill="x", padx=10, pady=10)
         
-        self.history_scroll = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent", height=300)
-        self.history_scroll.pack(fill="x", padx=10)
-        
+        # CHAT FRAME
         self.chat_frame = ctk.CTkFrame(self, fg_color=BG_SURFACE, corner_radius=15, border_width=1, border_color="#1a1a2e")
         self.chat_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
         self.chat_frame.grid_rowconfigure(0, weight=1); self.chat_frame.grid_columnconfigure(0, weight=1)
@@ -95,6 +103,7 @@ class SourceAgentWorkspace(ctk.CTk):
         self.chat_display = ctk.CTkTextbox(self.chat_frame, state="disabled", font=("Segoe UI", 16), wrap="word", fg_color="transparent", spacing1=5, spacing3=5)
         self.chat_display.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
         
+        # INPUT BAR
         input_bar = ctk.CTkFrame(self.chat_frame, fg_color=BG_DARK, corner_radius=12)
         input_bar.grid(row=2, column=0, sticky="ew", padx=20, pady=20)
         input_bar.grid_columnconfigure(1, weight=1)
@@ -103,9 +112,9 @@ class SourceAgentWorkspace(ctk.CTk):
         self.user_input = ctk.CTkEntry(input_bar, placeholder_text="Ask about your docs or attached media...", height=50, fg_color="transparent", border_width=0, font=("Segoe UI", 14))
         self.user_input.grid(row=0, column=1, sticky="ew")
         self.user_input.bind("<Return>", lambda e: self.send_message())
-        
         ctk.CTkButton(input_bar, text="Send", width=80, command=self.send_message).grid(row=0, column=2, padx=10)
         
+        # STATUS BAR
         status_frame = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
         status_frame.grid(row=1, column=0, sticky="ew", padx=30)
         self.status_bar = ctk.CTkLabel(status_frame, text="🟢 Ready", font=("Segoe UI", 12), text_color=TEXT_MUTED)
@@ -113,23 +122,60 @@ class SourceAgentWorkspace(ctk.CTk):
         ctk.CTkButton(status_frame, text="⚙️ Settings", width=60, fg_color="transparent", hover_color="#1a1a2e", text_color=TEXT_MUTED, command=self.open_settings_menu).pack(side="right")
         
         self.update_sidebar_history()
+        self.update_source_count()
+        self.load_active_chat()
 
+    # --- AI & RAG LOGIC ---
     def setup_ai_failover(self):
         key = os.environ.get("OPENROUTER_API_KEY")
         if not key:
-            messagebox.showwarning("Missing Credentials", f"Warning: Could not find OPENROUTER_API_KEY in:\n{ENV_FILE}\n\nPlease ensure your .env file is next to the executable.")
-            key = "missing_key" # Prevent the hard crash
+            key = "missing_key" 
             
         base = "https://openrouter.ai/api/v1"
-        r_prim = ChatOpenAI(base_url=base, api_key=key, model="mistralai/mistral-small-3.1-24b:free")
-        r_back = ChatOpenAI(base_url=base, api_key=key, model="google/gemma-3-27b-it:free")
-        self.researcher_engine = r_prim.with_fallbacks([r_back])
-        
         e_prim = ChatOpenAI(base_url=base, api_key=key, model="google/gemini-2.0-flash-lite-preview-02-05:free", streaming=True)
         e_back = ChatOpenAI(base_url=base, api_key=key, model="meta-llama/llama-3.2-11b-vision-instruct:free", streaming=True)
         self.editor_engine = e_prim.with_fallbacks([e_back])
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
+    def load_local_vectorstore(self):
+        index_path = os.path.join(SOURCE_DIR, "faiss_index")
+        if os.path.exists(index_path):
+            try:
+                self.cached_vectorstore = FAISS.load_local(index_path, self.embeddings, allow_dangerous_deserialization=True)
+            except: pass
+
+    def add_source_document(self):
+        fps = filedialog.askopenfilenames(filetypes=[("Documents", "*.pdf *.txt *.docx")])
+        if fps:
+            self.status_bar.configure(text="Ingesting Documents...", text_color="#f39c12")
+            for fp in fps:
+                shutil.copy(fp, SOURCE_DIR)
+            threading.Thread(target=self.process_documents_to_vectorstore, daemon=True).start()
+
+    def process_documents_to_vectorstore(self):
+        docs = []
+        for file in os.listdir(SOURCE_DIR):
+            path = os.path.join(SOURCE_DIR, file)
+            try:
+                if file.endswith(".pdf"): docs.extend(PyMuPDFLoader(path).load())
+                elif file.endswith(".txt"): docs.extend(TextLoader(path, encoding="utf-8").load())
+                elif file.endswith(".docx"): docs.extend(Docx2txtLoader(path).load())
+            except: pass
+        
+        if docs:
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            splits = splitter.split_documents(docs)
+            self.cached_vectorstore = FAISS.from_documents(splits, self.embeddings)
+            self.cached_vectorstore.save_local(os.path.join(SOURCE_DIR, "faiss_index"))
+            self.after(0, lambda: self.status_bar.configure(text="Sources Integrated.", text_color="#2ecc71"))
+            self.after(0, self.update_source_count)
+
+    def update_source_count(self):
+        count = len([f for f in os.listdir(SOURCE_DIR) if f.endswith(('.pdf', '.txt', '.docx'))])
+        if hasattr(self, 'source_count_lbl'):
+            self.source_count_lbl.configure(text=f"{count} Sources Loaded", text_color="#2ecc71" if count > 0 else TEXT_MUTED)
+
+    # --- CHAT & MEDIA LOGIC ---
     def attach_media(self):
         fp = filedialog.askopenfilename(filetypes=[("Media", "*.png;*.jpg;*.jpeg;*.mp4;*.avi")])
         if fp:
@@ -140,34 +186,108 @@ class SourceAgentWorkspace(ctk.CTk):
         q = self.user_input.get().strip()
         if not q: return
         self.user_input.delete(0, "end")
+        
+        # Save to visual history immediately
         self.chat_display.configure(state="normal")
         self.chat_display.insert("end", f"👤 You: {q}\n\n")
         self.chat_display.configure(state="disabled")
+        
+        # Save to file
+        self.append_to_chat_history(f"👤 You: {q}\n\n")
+        
         threading.Thread(target=self.process_query, args=(q,), daemon=True).start()
 
     def process_query(self, query):
         try:
-            self.after(0, lambda: self.status_bar.configure(text="🧠 Thinking...", text_color=ACCENT))
-            media_msg = None
+            self.after(0, lambda: self.status_bar.configure(text="🧠 Searching Sources...", text_color=ACCENT))
+            
+            # 1. RAG Context Retrieval
+            context = ""
+            if self.cached_vectorstore:
+                retriever = self.cached_vectorstore.as_retriever(search_kwargs={"k": 3})
+                retrieved_docs = retriever.invoke(query)
+                context = "\n".join([d.page_content for d in retrieved_docs])
+
+            # 2. Construct Prompt
+            if context:
+                final_query = f"Use the following retrieved documents to answer the question.\n\nContext:\n{context}\n\nQuestion: {query}"
+            else:
+                final_query = query
+
+            # 3. Media Integration
+            messages = []
             if self.attached_media_path:
                 path = self.attached_media_path
                 self.attached_media_path = None
                 with open(path, "rb") as f: b64 = base64.b64encode(f.read()).decode('utf-8')
-                media_msg = HumanMessage(content=[{"type": "text", "text": query}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}])
+                messages.append(HumanMessage(content=[
+                    {"type": "text", "text": final_query}, 
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+                ]))
+            else:
+                messages.append(HumanMessage(content=final_query))
 
+            self.after(0, lambda: self.status_bar.configure(text="🧠 Thinking...", text_color=ACCENT))
             self.after(0, lambda: self.chat_display.configure(state="normal"))
             self.after(0, lambda: self.chat_display.insert("end", "🤖 Agent: "))
             
-            stream = self.editor_engine.stream([media_msg] if media_msg else query)
+            full_response = "🤖 Agent: "
+            stream = self.editor_engine.stream(messages)
+            
             for chunk in stream:
+                full_response += chunk.content
                 self.after(0, lambda c=chunk.content: self.chat_display.insert("end", c))
                 if self.token_speed > 0: time.sleep(self.token_speed / 1000.0) 
             
             self.after(0, lambda: self.chat_display.insert("end", "\n\n"))
             self.after(0, lambda: self.chat_display.configure(state="disabled"))
             self.after(0, lambda: self.status_bar.configure(text="🟢 Ready", text_color=TEXT_MUTED))
-        except Exception as e: self.after(0, lambda: messagebox.showerror("AI Error", str(e)))
+            
+            # Save AI response to file
+            full_response += "\n\n"
+            self.append_to_chat_history(full_response)
+            
+            # Update Session Title if new
+            if len(self.session_history) == 0 or self.session_history[0]['id'] != self.current_session_id:
+                title = query[:20] + "..." if len(query) > 20 else query
+                self.session_history.insert(0, {'id': self.current_session_id, 'title': title})
+                self.save_current_state()
+                self.after(0, self.update_sidebar_history)
 
+        except Exception as e: 
+            self.after(0, lambda: messagebox.showerror("AI Error", str(e)))
+            self.after(0, lambda: self.status_bar.configure(text="🟢 Ready", text_color=TEXT_MUTED))
+
+    # --- SESSION MANAGEMENT ---
+    def append_to_chat_history(self, text):
+        hist_file = os.path.join(HISTORY_DIR, f"{self.current_session_id}.txt")
+        with open(hist_file, "a", encoding="utf-8") as f:
+            f.write(text)
+
+    def load_active_chat(self):
+        self.chat_display.configure(state="normal")
+        self.chat_display.delete("1.0", "end")
+        hist_file = os.path.join(HISTORY_DIR, f"{self.current_session_id}.txt")
+        if os.path.exists(hist_file):
+            with open(hist_file, "r", encoding="utf-8") as f:
+                self.chat_display.insert("end", f.read())
+        self.chat_display.configure(state="disabled")
+
+    def switch_session(self, session_id):
+        self.current_session_id = session_id
+        self.load_active_chat()
+
+    def start_new_session(self):
+        self.current_session_id = str(uuid.uuid4())
+        self.load_active_chat()
+
+    def update_sidebar_history(self):
+        for w in self.history_scroll.winfo_children(): w.destroy()
+        for item in self.session_history: 
+            ctk.CTkButton(self.history_scroll, text=item['title'], fg_color="transparent", anchor="w", 
+                          command=lambda sid=item['id']: self.switch_session(sid)).pack(fill="x", pady=2)
+
+    # --- UTILS ---
     def open_settings_menu(self):
         win = ctk.CTkToplevel(self)
         win.title("Settings")
@@ -196,19 +316,13 @@ class SourceAgentWorkspace(ctk.CTk):
                     self.user_name = d.get("user_name")
                     self.token_speed = d.get("token_speed", 0)
                     self.session_history = d.get("history", [])
+                    if self.session_history:
+                        self.current_session_id = self.session_history[0]['id']
             except: pass
 
     def save_current_state(self):
         with open(SAVE_FILE, "w") as f:
             json.dump({"user_name": self.user_name, "token_speed": self.token_speed, "history": self.session_history}, f)
-
-    def start_new_session(self):
-        self.current_session_id = str(uuid.uuid4())
-        self.chat_display.configure(state="normal"); self.chat_display.delete("1.0", "end"); self.chat_display.configure(state="disabled")
-
-    def update_sidebar_history(self):
-        for w in self.history_scroll.winfo_children(): w.destroy()
-        for item in self.session_history: ctk.CTkButton(self.history_scroll, text=item['title'], fg_color="transparent").pack(fill="x")
 
 app = SourceAgentWorkspace()
 app.mainloop()
