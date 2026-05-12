@@ -23,7 +23,6 @@ SAVE_FILE = os.path.join(BASE_DIR, "config.json")
 HISTORY_DIR = os.path.join(BASE_DIR, "chat_storage")
 ENV_FILE = os.path.join(BASE_DIR, ".env")
 
-# Ensure base directories exist
 for d in [SOURCE_DIR, HISTORY_DIR]:
     if not os.path.exists(d): os.makedirs(d)
 
@@ -36,20 +35,19 @@ TEXT_MUTED = "#64748b"
 class SourceAgentWorkspace(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("SourceAgent Pro Setup")
+        self.title("SourceAgent Pro")
         self.geometry("1300x850")
         ctk.set_appearance_mode("Dark")
         
         self.cached_vectorstore = None
         self.attached_media_path = None
         self.user_name = None
-        self.token_speed = 30 # Default retro typing speed
+        self.token_speed = 30 
         self.current_session_id = str(uuid.uuid4())
         self.session_history = []
         
         self.load_save_data()
         
-        # Check if setup is required
         from dotenv import load_dotenv
         load_dotenv(ENV_FILE)
         api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -62,9 +60,6 @@ class SourceAgentWorkspace(ctk.CTk):
             self.setup_ai_failover(api_key)
             self.show_cinematic_welcome()
 
-    # ==========================================
-    # STAGE 1: DYNAMIC BACKGROUND ANIMATION
-    # ==========================================
     def draw_dynamic_background(self):
         self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg="#020205")
         self.bg_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -86,14 +81,10 @@ class SourceAgentWorkspace(ctk.CTk):
         self.bg_canvas.lower("all")
         self.after(40, self.animate_bg)
 
-    # ==========================================
-    # STAGE 2: INSTALLER WIZARD (OOBE)
-    # ==========================================
     def show_installer_wizard(self):
         self.wizard_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.wizard_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
         
-        # Waving Title inside the Wizard
         self.title_frame = tk.Frame(self.wizard_frame, bg="#020205", width=600, height=100)
         self.title_frame.place(relx=0.5, rely=0.25, anchor="center")
         self.title_chars = []
@@ -109,7 +100,6 @@ class SourceAgentWorkspace(ctk.CTk):
         self.is_waving = True
         self.animate_wave()
         
-        # Setup Box
         box = ctk.CTkFrame(self.wizard_frame, fg_color=BG_SURFACE, corner_radius=20, border_width=1, border_color="#1a1a2e")
         box.place(relx=0.5, rely=0.6, anchor="center")
         
@@ -142,7 +132,6 @@ class SourceAgentWorkspace(ctk.CTk):
             messagebox.showwarning("Missing Data", "Please provide both your name and API key to initialize.")
             return
             
-        # Write the .env file programmatically
         with open(ENV_FILE, "w") as f:
             f.write(f"OPENROUTER_API_KEY={api_key}\n")
             
@@ -155,9 +144,6 @@ class SourceAgentWorkspace(ctk.CTk):
         self.setup_ai_failover(api_key)
         self.show_cinematic_welcome()
 
-    # ==========================================
-    # STAGE 3: CINEMATIC TYPING WELCOME
-    # ==========================================
     def show_cinematic_welcome(self):
         self.welcome_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.welcome_frame.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -181,13 +167,9 @@ class SourceAgentWorkspace(ctk.CTk):
 
     def transition_to_workspace(self):
         self.welcome_frame.destroy()
-        self.bg_canvas.destroy() # Clear background to save memory
-        self.title("SourceAgent Pro")
+        self.bg_canvas.destroy() 
         self.build_main_ui()
 
-    # ==========================================
-    # STAGE 4: WORKSPACE & AI ENGINE
-    # ==========================================
     def setup_ai_failover(self, key):
         base = "https://openrouter.ai/api/v1"
         e_prim = ChatOpenAI(base_url=base, api_key=key, model="google/gemini-2.0-flash-lite-preview-02-05:free", streaming=True)
@@ -205,22 +187,18 @@ class SourceAgentWorkspace(ctk.CTk):
     def build_main_ui(self):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
         
-        # Sidebar
         self.sidebar = ctk.CTkFrame(self, width=300, fg_color=BG_DARK, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         ctk.CTkLabel(self.sidebar, text="📚 SourceAgent", font=("Segoe UI", 22, "bold")).pack(pady=(30, 10), padx=20)
         
-        # Source Tools
         ctk.CTkButton(self.sidebar, text="📄 Add Source Document", fg_color="#27ae60", hover_color="#2ecc71", command=self.add_source_document).pack(fill="x", padx=20, pady=(10, 5))
         self.source_count_lbl = ctk.CTkLabel(self.sidebar, text="0 Sources Loaded", font=("Segoe UI", 11), text_color=TEXT_MUTED)
         self.source_count_lbl.pack(pady=(0, 20))
         
-        # Sessions
         ctk.CTkButton(self.sidebar, text="+ New Session", fg_color=ACCENT, command=self.start_new_session).pack(fill="x", padx=20, pady=10)
         self.history_scroll = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent", height=400)
         self.history_scroll.pack(fill="x", padx=10, pady=10)
         
-        # Chat Canvas
         self.chat_frame = ctk.CTkFrame(self, fg_color=BG_SURFACE, corner_radius=15, border_width=1, border_color="#1a1a2e")
         self.chat_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
         self.chat_frame.grid_rowconfigure(0, weight=1); self.chat_frame.grid_columnconfigure(0, weight=1)
@@ -228,7 +206,6 @@ class SourceAgentWorkspace(ctk.CTk):
         self.chat_display = ctk.CTkTextbox(self.chat_frame, state="disabled", font=("Segoe UI", 16), wrap="word", fg_color="transparent", spacing1=5, spacing3=5)
         self.chat_display.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
         
-        # Input Controller
         input_bar = ctk.CTkFrame(self.chat_frame, fg_color=BG_DARK, corner_radius=12)
         input_bar.grid(row=2, column=0, sticky="ew", padx=20, pady=20)
         input_bar.grid_columnconfigure(1, weight=1)
@@ -239,7 +216,6 @@ class SourceAgentWorkspace(ctk.CTk):
         self.user_input.bind("<Return>", lambda e: self.send_message())
         ctk.CTkButton(input_bar, text="Send", width=80, command=self.send_message).grid(row=0, column=2, padx=10)
         
-        # Status Bar
         status_frame = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
         status_frame.grid(row=1, column=0, sticky="ew", padx=30)
         self.status_bar = ctk.CTkLabel(status_frame, text="🟢 Systems Online", font=("Segoe UI", 12), text_color=TEXT_MUTED)
@@ -250,9 +226,6 @@ class SourceAgentWorkspace(ctk.CTk):
         self.update_source_count()
         self.load_active_chat()
 
-    # ==========================================
-    # LOGIC HANDLING
-    # ==========================================
     def add_source_document(self):
         fps = filedialog.askopenfilenames(filetypes=[("Documents", "*.pdf *.txt *.docx")])
         if fps:
@@ -344,7 +317,6 @@ class SourceAgentWorkspace(ctk.CTk):
             self.after(0, lambda: messagebox.showerror("AI Error", str(e)))
             self.after(0, lambda: self.status_bar.configure(text="🟢 Systems Online", text_color=TEXT_MUTED))
 
-    # --- UTILS ---
     def append_to_chat_history(self, text):
         with open(os.path.join(HISTORY_DIR, f"{self.current_session_id}.txt"), "a", encoding="utf-8") as f: f.write(text)
 
@@ -392,7 +364,7 @@ class SourceAgentWorkspace(ctk.CTk):
                 with open(SAVE_FILE, "r") as f:
                     d = json.load(f)
                     self.user_name = d.get("user_name")
-                    self.token_speed = d.get("token_speed", 30) # Restored default speed!
+                    self.token_speed = d.get("token_speed", 30) 
                     self.session_history = d.get("history", [])
                     if self.session_history: self.current_session_id = self.session_history[0]['id']
             except: pass
