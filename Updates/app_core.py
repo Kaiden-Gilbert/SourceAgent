@@ -1,4 +1,4 @@
-import os, threading, time, shutil, math, json, queue
+import os, threading, time, shutil, math, uuid, json, queue
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -29,13 +29,53 @@ You have ONE job: Answer questions using ONLY the provided policy documents.
 4. Keep tone clinical, professional, and precise."""
 
 # ==========================================
-# DEDICATED CHAT WINDOW (MULTI-TASKING)
+# CUSTOM AUTHENTICATION DIALOG
+# ==========================================
+class AuthDialog(ctk.CTkToplevel):
+    def __init__(self, parent, password, success_callback):
+        super().__init__(parent)
+        self.title("Authentication Required")
+        self.geometry("350x220")
+        self.configure(fg_color="#0f172a")
+        self.attributes("-topmost", True)
+        self.resizable(False, False)
+        
+        # Center the dialog
+        self.update_idletasks()
+        x = parent.winfo_x() + (parent.winfo_width() // 2) - (350 // 2)
+        y = parent.winfo_y() + (parent.winfo_height() // 2) - (220 // 2)
+        self.geometry(f"+{x}+{y}")
+        
+        ctk.CTkLabel(self, text="🔒 Secure Session", font=("Segoe UI", 18, "bold"), text_color="#f8fafc").pack(pady=(25, 10))
+        ctk.CTkLabel(self, text="Enter Vault Password to decrypt.", text_color="#94a3b8", font=("Segoe UI", 12)).pack(pady=(0, 15))
+        
+        self.pwd = ctk.CTkEntry(self, show="*", placeholder_text="Password...", width=250, height=40, fg_color="#020617", border_color="#334155")
+        self.pwd.pack(pady=5)
+        self.pwd.bind("<Return>", lambda e: self.check())
+        
+        ctk.CTkButton(self, text="Unlock", fg_color="#3b82f6", font=("Segoe UI", 14, "bold"), height=40, width=250, command=self.check).pack(pady=15)
+        
+        self.password = password
+        self.success_callback = success_callback
+        self.pwd.focus()
+        
+    def check(self):
+        if self.pwd.get() == self.password:
+            self.destroy()
+            self.success_callback()
+        else:
+            self.pwd.configure(border_color="#ef4444")
+            self.pwd.delete(0, "end")
+
+# ==========================================
+# DEDICATED CHAT WINDOW (PERSISTENT)
 # ==========================================
 class DedicatedChatWindow(ctk.CTkToplevel):
     def __init__(self, master, app_core):
         super().__init__(master)
         self.app_core = app_core
-        self.title("Dedicated Session | Policy Advisor")
+        self.session_id = str(uuid.uuid4())
+        self.title(f"Dedicated Session | {self.session_id[:8]}")
         self.geometry("800x600")
         self.configure(fg_color="#0f172a")
         
@@ -56,7 +96,17 @@ class DedicatedChatWindow(ctk.CTkToplevel):
         self.entry.bind("<Return>", lambda e: self.send())
         
         ctk.CTkButton(input_bar, text="Submit", width=100, height=40, font=("Segoe UI", 14, "bold"), fg_color="#3b82f6", command=self.send).grid(row=0, column=1, padx=10, pady=5)
+        
+        # Register new session in main app
+        self.app_core.session_history.insert(0, {'id': self.session_id, 'title': "New Dedicated Session"})
+        self.app_core.save_settings()
+        self.app_core.update_sidebar_history()
+        
         self.process_queue()
+
+    def append_to_history(self, text):
+        with open(os.path.join(HISTORY_DIR, f"{self.session_id}.txt"), "a", encoding="utf-8") as f:
+            f.write(text)
 
     def process_queue(self):
         try:
@@ -66,15 +116,25 @@ class DedicatedChatWindow(ctk.CTkToplevel):
                 self.chat.insert("end", chunk)
                 self.chat.see("end")
                 self.chat.configure(state="disabled")
+                self.append_to_history(chunk)
         except queue.Empty: pass
         self.after(50, self.process_queue)
 
-    def safe_ui_update(self, text): self.text_queue.put(text)
+    def safe_ui_update(self, text): 
+        self.text_queue.put(text)
 
     def send(self):
         q = self.entry.get().strip()
         if not q: return
         self.entry.delete(0, "end")
+        
+        # Update title in sidebar dynamically
+        for item in self.app_core.session_history:
+            if item['id'] == self.session_id and item['title'] == "New Dedicated Session":
+                item['title'] = q[:22] + "..." if len(q) > 22 else q
+                self.app_core.save_settings()
+                self.app_core.update_sidebar_history()
+                
         self.safe_ui_update(f"\nUSER: {q}\n\nADVISOR: ")
         threading.Thread(target=self.generate_response, args=(q,), daemon=True).start()
 
@@ -100,17 +160,16 @@ class PolicyAdvisorV19(ctk.CTk):
         self.title("Policy Advisor 2026 | Enterprise Edition")
         self.geometry("1250x800")
         
-        # Core Settings
         self.bg_deep = "#020617"
         self.bg_surface = "#0f172a"
         self.accent = "#3b82f6"
         self.text_queue = queue.Queue()
+        self.current_session_id = str(uuid.uuid4())
         
         self.load_settings()
         ctk.set_appearance_mode("Dark")
         self.draw_kinetic_background()
         
-        # AI & DB Init
         load_dotenv(ENV_FILE)
         self.api_key = os.environ.get("OPENROUTER_API_KEY")
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
@@ -118,13 +177,11 @@ class PolicyAdvisorV19(ctk.CTk):
         self.load_db()
         self.build_ai_engine()
         
-        # SECURITY CHECK
         if hasattr(self, 'app_password') and self.app_password != "":
             self.show_login_screen()
         else:
             self.setup_main_ui()
 
-    # --- SECURITY PROTOCOL ---
     def show_login_screen(self):
         self.login_frame = ctk.CTkFrame(self, fg_color=self.bg_surface, corner_radius=15, width=400, height=300)
         self.login_frame.place(relx=0.5, rely=0.5, anchor="center")
@@ -132,7 +189,7 @@ class PolicyAdvisorV19(ctk.CTk):
         ctk.CTkLabel(self.login_frame, text="🔒 System Locked", font=("Segoe UI", 24, "bold")).pack(pady=(40, 10))
         ctk.CTkLabel(self.login_frame, text="Enter administrative password to access database.", text_color="#94a3b8").pack(pady=(0, 20))
         
-        pwd_entry = ctk.CTkEntry(self.login_frame, show="*", width=250, height=45, placeholder_text="Password...")
+        pwd_entry = ctk.CTkEntry(self.login_frame, show="*", width=250, height=45, placeholder_text="Password...", fg_color="#020617", border_color="#334155")
         pwd_entry.pack(pady=10)
         
         def attempt_login(e=None):
@@ -146,7 +203,6 @@ class PolicyAdvisorV19(ctk.CTk):
         pwd_entry.bind("<Return>", attempt_login)
         ctk.CTkButton(self.login_frame, text="Unlock Engine", font=("Segoe UI", 14, "bold"), fg_color=self.accent, height=45, width=250, command=attempt_login).pack(pady=(10, 40))
 
-    # --- KINETIC BACKGROUND ---
     def draw_kinetic_background(self):
         self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg=self.bg_deep)
         self.bg_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
@@ -174,20 +230,22 @@ class PolicyAdvisorV19(ctk.CTk):
             win.attributes("-alpha", win.attributes("-alpha") + 0.08)
             self.after(20, lambda: self.fade_in(win, target))
 
-    # --- MAIN INTERFACE ---
     def setup_main_ui(self):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
         
-        # Sidebar
-        self.sidebar = ctk.CTkFrame(self, width=280, fg_color="transparent")
+        self.sidebar = ctk.CTkFrame(self, width=300, fg_color="transparent")
         self.sidebar.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
         
         header_box = ctk.CTkFrame(self.sidebar, fg_color=self.bg_surface, corner_radius=12)
         header_box.pack(fill="x", pady=10)
         ctk.CTkLabel(header_box, text="🏛️ Policy Advisor", font=("Segoe UI", 20, "bold")).pack(pady=20)
         
-        # New Feature: Launch Dedicated Window
-        ctk.CTkButton(self.sidebar, text="⧉ Launch Dedicated Chat", font=("Segoe UI", 14, "bold"), fg_color="#10b981", hover_color="#059669", height=45, command=lambda: DedicatedChatWindow(self, self)).pack(fill="x", padx=10, pady=(0, 10))
+        ctk.CTkButton(self.sidebar, text="+ New Dashboard Inquiry", font=("Segoe UI", 13, "bold"), fg_color=self.accent, height=40, command=self.start_new_session).pack(fill="x", padx=10, pady=(0, 5))
+        ctk.CTkButton(self.sidebar, text="⧉ Launch Dedicated Chat", font=("Segoe UI", 13, "bold"), fg_color="#10b981", hover_color="#059669", height=40, command=lambda: DedicatedChatWindow(self, self)).pack(fill="x", padx=10, pady=(0, 10))
+        
+        # History Scroll
+        self.history_scroll = ctk.CTkScrollableFrame(self.sidebar, fg_color=self.bg_surface, corner_radius=12, height=250)
+        self.history_scroll.pack(fill="x", pady=10)
         
         tools_box = ctk.CTkFrame(self.sidebar, fg_color=self.bg_surface, corner_radius=12)
         tools_box.pack(fill="x", pady=10)
@@ -198,14 +256,12 @@ class PolicyAdvisorV19(ctk.CTk):
         self.status_lbl = ctk.CTkLabel(self.sidebar, text="● Engine Online", text_color="#10b981", font=("Segoe UI", 12, "bold"))
         self.status_lbl.pack(side="bottom", pady=20)
 
-        # Dashboard Chat
         work_area = ctk.CTkFrame(self, fg_color=self.bg_surface, corner_radius=15)
         work_area.grid(row=0, column=1, sticky="nsew", padx=(10, 20), pady=20)
         work_area.grid_rowconfigure(0, weight=1); work_area.grid_columnconfigure(0, weight=1)
 
         self.chat = ctk.CTkTextbox(work_area, font=("Segoe UI", 15), fg_color="transparent", spacing1=8, spacing3=8)
         self.chat.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
-        self.chat.insert("1.0", "SYSTEM: Main Dashboard Online.\nTip: Click 'Launch Dedicated Chat' to open multiple sessions.\n\n")
         self.chat.configure(state="disabled")
         
         input_bar = ctk.CTkFrame(work_area, fg_color="#1e293b", corner_radius=10)
@@ -217,14 +273,53 @@ class PolicyAdvisorV19(ctk.CTk):
         self.entry.bind("<Return>", lambda e: self.send())
         ctk.CTkButton(input_bar, text="Submit", width=100, height=40, font=("Segoe UI", 14, "bold"), fg_color=self.accent, command=self.send).grid(row=0, column=1, padx=10, pady=5)
         
+        self.update_sidebar_history()
+        self.load_active_chat()
         self.process_queue()
 
-    # --- AI ARCHITECTURE ---
     def build_ai_engine(self):
         if not self.api_key: return
-        try:
-            self.llm = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model=self.ai_model, temperature=self.ai_temp, max_tokens=self.ai_max_tokens, top_p=0.85, streaming=True)
+        try: self.llm = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model=self.ai_model, temperature=self.ai_temp, max_tokens=self.ai_max_tokens, top_p=0.85, streaming=True)
         except: pass
+
+    # --- SESSION MANAGEMENT & AUTHENTICATION ---
+    def start_new_session(self):
+        self.current_session_id = str(uuid.uuid4())
+        self.load_active_chat()
+
+    def auth_switch_session(self, session_id):
+        # If password exists, demand it before switching memory context
+        if hasattr(self, 'app_password') and self.app_password != "":
+            AuthDialog(self, self.app_password, success_callback=lambda: self.execute_switch(session_id))
+        else:
+            self.execute_switch(session_id)
+
+    def execute_switch(self, session_id):
+        self.current_session_id = session_id
+        self.load_active_chat()
+
+    def update_sidebar_history(self):
+        if not hasattr(self, 'history_scroll'): return
+        for w in self.history_scroll.winfo_children(): w.destroy()
+        if not self.session_history:
+            ctk.CTkLabel(self.history_scroll, text="No saved sessions.", text_color="#64748b").pack(pady=20)
+            return
+        for item in self.session_history: 
+            btn = ctk.CTkButton(self.history_scroll, text=item['title'], fg_color="transparent", hover_color="#1e293b", text_color="#f8fafc", font=("Segoe UI", 12), anchor="w", height=35, command=lambda sid=item['id']: self.auth_switch_session(sid))
+            btn.pack(fill="x", pady=2)
+
+    def append_to_history(self, text):
+        with open(os.path.join(HISTORY_DIR, f"{self.current_session_id}.txt"), "a", encoding="utf-8") as f: f.write(text)
+
+    def load_active_chat(self):
+        self.chat.configure(state="normal")
+        self.chat.delete("1.0", "end")
+        hf = os.path.join(HISTORY_DIR, f"{self.current_session_id}.txt")
+        if os.path.exists(hf):
+            with open(hf, "r", encoding="utf-8") as f: self.chat.insert("end", f.read())
+        else:
+            self.chat.insert("1.0", "SYSTEM: Main Dashboard Online. Ready for inquiry.\n\n")
+        self.chat.configure(state="disabled")
 
     def process_queue(self):
         try:
@@ -234,6 +329,7 @@ class PolicyAdvisorV19(ctk.CTk):
                 self.chat.insert("end", chunk)
                 self.chat.see("end")
                 self.chat.configure(state="disabled")
+                self.append_to_history(chunk)
         except queue.Empty: pass
         self.after(50, self.process_queue)
 
@@ -243,6 +339,12 @@ class PolicyAdvisorV19(ctk.CTk):
         q = self.entry.get().strip()
         if not q: return
         self.entry.delete(0, "end")
+        
+        if len(self.session_history) == 0 or self.session_history[0]['id'] != self.current_session_id:
+            self.session_history.insert(0, {'id': self.current_session_id, 'title': q[:22] + "..." if len(q) > 22 else q})
+            self.save_settings()
+            self.update_sidebar_history()
+            
         self.safe_ui_update(f"\nUSER: {q}\n\nADVISOR: ")
         self.status_lbl.configure(text="● Auditing Database...", text_color="#f59e0b")
         threading.Thread(target=self.generate_response, args=(q,), daemon=True).start()
@@ -262,7 +364,7 @@ class PolicyAdvisorV19(ctk.CTk):
             self.safe_ui_update(f"\n[ERROR: {str(e)}]\n\n---\n")
             self.after(0, lambda: self.status_lbl.configure(text="● Engine Error", text_color="#ef4444"))
 
-    # --- DATABASE MANAGER (NEW: REMOVE SOURCES) ---
+    # --- DATABASE MANAGER ---
     def load_db(self):
         index = os.path.join(SOURCE_DIR, "faiss_index")
         self.db = FAISS.load_local(index, self.embeddings, allow_dangerous_deserialization=True) if os.path.exists(index) else None
@@ -318,7 +420,7 @@ class PolicyAdvisorV19(ctk.CTk):
             if os.path.exists(os.path.join(SOURCE_DIR, "faiss_index")): shutil.rmtree(os.path.join(SOURCE_DIR, "faiss_index"))
         self.after(0, lambda: self.status_lbl.configure(text="● Engine Online", text_color="#10b981"))
 
-    # --- ADVANCED SETTINGS (NEW: PASSWORD) ---
+    # --- ADVANCED SETTINGS ---
     def open_settings(self):
         win = ctk.CTkToplevel(self)
         win.title("Advanced Configuration")
@@ -348,9 +450,8 @@ class PolicyAdvisorV19(ctk.CTk):
         tok_slider.set(self.ai_max_tokens); tok_slider.pack(pady=(5, 15))
         tok_slider.configure(command=lambda v: tok_val.configure(text=f"{int(v)}"))
 
-        # Vault Password Setting
         ctk.CTkLabel(win, text="App Vault Password (Leave blank to disable):", font=("Segoe UI", 12)).pack(anchor="w", padx=40)
-        pwd_entry = ctk.CTkEntry(win, width=370, placeholder_text="Set a password...", show="*")
+        pwd_entry = ctk.CTkEntry(win, width=370, placeholder_text="Set a password...", show="*", fg_color="#020617", border_color="#334155")
         if hasattr(self, 'app_password'): pwd_entry.insert(0, self.app_password)
         pwd_entry.pack(pady=5)
 
@@ -366,6 +467,7 @@ class PolicyAdvisorV19(ctk.CTk):
         ctk.CTkButton(win, text="Apply & Reboot Engine", fg_color=self.accent, height=40, font=("Segoe UI", 14, "bold"), command=apply_changes).pack(pady=20)
 
     def load_settings(self):
+        self.session_history = []
         if os.path.exists(SAVE_FILE):
             try:
                 with open(SAVE_FILE, "r") as f:
@@ -374,6 +476,7 @@ class PolicyAdvisorV19(ctk.CTk):
                     self.ai_temp = d.get("ai_temp", 0.1) 
                     self.ai_max_tokens = d.get("ai_max_tokens", 1024)
                     self.app_password = d.get("app_password", "")
+                    self.session_history = d.get("history", [])
             except: pass
 
     def save_settings(self):
@@ -382,7 +485,8 @@ class PolicyAdvisorV19(ctk.CTk):
                 "ai_model": self.ai_model,
                 "ai_temp": self.ai_temp,
                 "ai_max_tokens": self.ai_max_tokens,
-                "app_password": getattr(self, 'app_password', "")
+                "app_password": getattr(self, 'app_password', ""),
+                "history": self.session_history
             }, f)
 
 if __name__ == "__main__":
