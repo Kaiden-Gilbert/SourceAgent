@@ -1,9 +1,8 @@
-import os, threading, time, base64, uuid, json, shutil
+import os, threading, time, shutil
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
-# LangChain Imports
 from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
@@ -12,7 +11,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
 
-# --- PATHS ---
+# --- VAULT CONFIG ---
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
 HISTORY_DIR = os.path.join(BASE_DIR, "chat_storage")
@@ -21,75 +20,77 @@ os.makedirs(SOURCE_DIR, exist_ok=True)
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
 # --- HARDCODED SYSTEM INSTRUCTIONS ---
-POLICY_ADVISOR_SYSTEM_PROMPT = """You are an internal company policy knowledge repository named "Policy Advisor 2026." 
-Your primary goal is to answer employee questions about workplace situations strictly by referencing official company policy documents provided to you in the context.
+POLICY_ADVISOR_SYSTEM_PROMPT = """You are "Policy Advisor 2026." 
+Answer employee questions strictly by referencing official company policy documents provided to you in the context.
 
-You must only provide answers that are grounded in the available policy content. When a relevant policy applies, you must:
-- Identify the exact policy name
-- Identify the specific section within that policy
-- Quote verbatim the exact excerpt from the policy that supports the answer
-- Clearly separate quoted material from any explanation
+When a relevant policy applies:
+- Identify the exact policy name and section.
+- Quote verbatim the exact excerpt from the policy.
+- Clearly separate quoted material from your explanation.
 
-Before identifying relevant policies, interpret the scenario and identify all underlying policy themes and risks (e.g., bribery, conflict of interest, safeguarding, data protection). Expand the scenario into these themes and search for related policies. Do not rely solely on direct keyword matches.
+Before answering, interpret the scenario and identify all underlying policy themes (e.g., bribery, safeguarding, data protection).
 
-After presenting all relevant quoted excerpts, provide:
-1) A plain English explanation of what the policy means (based strictly on quoted text).
-2) If a specific situation is described, a plain English application of the policy to that scenario.
+After presenting quoted excerpts, provide:
+1) A plain English explanation of what the policy means.
+2) If a situation is described, a plain English application of the policy to that situation.
 
-Consider the user’s role. Only ask for the user’s role if policy applicability depends on it. Evaluate ALL available policies for every query. Do not stop at the first match.
+Prioritise legal/regulatory risks and order output by relevance/risk level.
+If no relevant policy is found, ask a maximum of 2 clarifying follow-up questions before stating none was found.
 
-When multiple policies apply:
-- Include all relevant policies.
-- Prioritise policies related to legal, regulatory, or compliance risks over general guidance.
-- Order output by relevance and risk level.
-- Prioritise Bribery, Anti-Corruption, or Gifts & Hospitality policies for related queries.
-- Avoid treating high-risk scenarios as routine.
-
-If no relevant policy is found, ask a maximum of 2 clarifying follow-up questions before stating that no applicable policy could be located.
-
-DO NOT invent, infer, or generalize beyond the written text. DO NOT provide personal opinions or external knowledge.
-
-Response Structure:
-- Policy Reference(s): [Policy name + section]
-- Verbatim Quote(s): [Exact excerpt(s)]
-- Plain English Explanation: [Synthesised explanation]
-- Application to Scenario: [If applicable]
+DO NOT invent, infer, or generalize. NO personal opinions or external knowledge.
 
 Tone: Professional, plain, and readable. Never fabricate language or citations."""
 
-class PolicyAdvisorEngine(ctk.CTk):
+class PolicyAdvisorV13(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Policy Advisor 2026 | Enterprise")
-        self.geometry("1100x700")
+        self.title("Policy Advisor 2026 | Enterprise Edition")
+        self.geometry("1200x800")
         ctk.set_appearance_mode("Dark")
         
-        # UI Setup
+        # Color Palette
+        self.bg_deep = "#020617"
+        self.bg_surface = "#0f172a"
+        self.accent = "#3b82f6"
+        
+        self.setup_ui()
+        load_dotenv(ENV_FILE)
+        api_key = os.environ.get("OPENROUTER_API_KEY")
+        if api_key: self.setup_ai(api_key)
+
+    def setup_ui(self):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         
-        self.sidebar = ctk.CTkFrame(self, width=250, corner_radius=0)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
+        # Sidebar
+        sidebar = ctk.CTkFrame(self, width=280, fg_color=self.bg_deep, corner_radius=0)
+        sidebar.grid(row=0, column=0, sticky="nsew")
         
-        ctk.CTkLabel(self.sidebar, text="🏛️ Advisor Engine", font=("Arial", 18, "bold")).pack(pady=20)
-        ctk.CTkButton(self.sidebar, text="Upload Documents", command=self.add_docs).pack(pady=5, padx=10)
+        ctk.CTkLabel(sidebar, text="🏛️ Policy Advisor", font=("Segoe UI", 20, "bold")).pack(pady=30)
         
-        self.chat = ctk.CTkTextbox(self, font=("Arial", 14))
+        # Control Panel
+        ctk.CTkLabel(sidebar, text="DATABASE TOOLS", font=("Segoe UI", 10, "bold"), text_color="#64748b").pack(anchor="w", padx=20, pady=(20, 5))
+        ctk.CTkButton(sidebar, text="Upload Documents", command=self.add_docs, fg_color="#0ea5e9").pack(fill="x", padx=20, pady=5)
+        ctk.CTkButton(sidebar, text="Database Manager", command=self.open_manager, fg_color="#334155").pack(fill="x", padx=20, pady=5)
+        
+        # Action Panel
+        ctk.CTkLabel(sidebar, text="SESSION ACTIONS", font=("Segoe UI", 10, "bold"), text_color="#64748b").pack(anchor="w", padx=20, pady=(20, 5))
+        ctk.CTkButton(sidebar, text="Clear Chat", fg_color="#ef4444", command=self.clear_chat).pack(fill="x", padx=20, pady=5)
+        ctk.CTkButton(sidebar, text="Export Response", fg_color="#64748b", command=self.export_chat).pack(fill="x", padx=20, pady=5)
+
+        # Main Chat
+        self.chat = ctk.CTkTextbox(self, font=("Segoe UI", 14), fg_color=self.bg_surface)
         self.chat.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
-        self.chat.insert("1.0", "System: Engine Ready. Awaiting inquiry...\n")
+        self.chat.insert("1.0", "System: Policy Advisor 2026 Online.\n\n")
         self.chat.configure(state="disabled")
         
-        self.entry = ctk.CTkEntry(self, placeholder_text="Enter policy inquiry...")
+        # Input
+        self.entry = ctk.CTkEntry(self, height=50, placeholder_text="Ask a compliance or policy question...")
         self.entry.grid(row=1, column=1, sticky="ew", padx=20, pady=(0, 20))
         self.entry.bind("<Return>", lambda e: self.send())
         
-        # AI Init
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         self.load_db()
-        load_dotenv(ENV_FILE)
-        api_key = os.environ.get("OPENROUTER_API_KEY")
-        if api_key:
-            self.llm = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key, model="google/gemini-2.0-flash-exp:free")
 
     def load_db(self):
         index = os.path.join(SOURCE_DIR, "faiss_index")
@@ -100,7 +101,7 @@ class PolicyAdvisorEngine(ctk.CTk):
         if not files: return
         for f in files: shutil.copy(f, SOURCE_DIR)
         self.rebuild_db()
-        messagebox.showinfo("Success", "Database updated.")
+        messagebox.showinfo("Done", "Policies indexed successfully.")
 
     def rebuild_db(self):
         docs = []
@@ -111,15 +112,31 @@ class PolicyAdvisorEngine(ctk.CTk):
             self.db = FAISS.from_documents(splitter.split_documents(docs), self.embeddings)
             self.db.save_local(os.path.join(SOURCE_DIR, "faiss_index"))
 
+    def clear_chat(self):
+        self.chat.configure(state="normal")
+        self.chat.delete("1.0", "end")
+        self.chat.configure(state="disabled")
+
+    def export_chat(self):
+        path = filedialog.asksaveasfilename(defaultextension=".txt")
+        if path:
+            with open(path, "w") as f: f.write(self.chat.get("1.0", "end"))
+
+    def open_manager(self):
+        messagebox.showinfo("DB Info", f"Policies Loaded: {len(os.listdir(SOURCE_DIR))}")
+
     def send(self):
         q = self.entry.get()
         if not q: return
         self.entry.delete(0, "end")
+        self.chat.configure(state="normal")
+        self.chat.insert("end", f"\n>> {q}\n\n")
+        self.chat.configure(state="disabled")
         threading.Thread(target=self.query_ai, args=(q,), daemon=True).start()
 
     def query_ai(self, q):
         self.chat.configure(state="normal")
-        self.chat.insert("end", f"\nUSER: {q}\n\n")
+        self.chat.insert("end", "Advisor is auditing...")
         
         context = ""
         if self.db:
@@ -127,12 +144,17 @@ class PolicyAdvisorEngine(ctk.CTk):
             context = "\n".join([d.page_content for d in docs])
         
         msgs = [SystemMessage(content=POLICY_ADVISOR_SYSTEM_PROMPT), 
-                HumanMessage(content=f"Context:\n{context}\n\nScenario: {q}")]
+                HumanMessage(content=f"Context:\n{context}\n\nInquiry: {q}")]
         
         response = self.llm.invoke(msgs).content
-        self.chat.insert("end", f"ADVISOR: {response}\n\n---\n")
+        self.chat.delete("end-2l", "end") # Remove "Auditing..."
+        self.chat.insert("end", f"{response}\n\n---\n")
         self.chat.configure(state="disabled")
 
+    def setup_ai(self, key):
+        base = "https://openrouter.ai/api/v1"
+        self.llm = ChatOpenAI(base_url=base, api_key=key, model="google/gemini-2.0-flash-exp:free").with_fallbacks([ChatOpenAI(base_url=base, api_key=key, model="meta-llama/llama-3.3-70b-instruct:free")])
+
 if __name__ == "__main__":
-    app = PolicyAdvisorEngine()
+    app = PolicyAdvisorV13()
     app.mainloop()
