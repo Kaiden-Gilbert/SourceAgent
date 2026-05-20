@@ -73,21 +73,26 @@ class SourceAgentWorkspace(ctk.CTk):
         self.title("Policy Advisor 2026 - Enterprise Edition")
         self.geometry("1350x850")
         
-        # V10 REDESIGN: Enterprise Slate Aesthetic
         self.theme_mode = "Dark"
-        self.bg_dark = "#0b0f19"      # Deep Navy Slate
-        self.bg_surface = "#111827"   # Elevated Slate
-        self.accent = "#3b82f6"       # Sharp Corporate Blue
-        self.accent_hover = "#2563eb" # Darker Blue for hover
-        self.text_main = "#f8fafc"    # Crisp White
-        self.text_muted = "#94a3b8"   # Readable Gray
+        self.bg_dark = "#0b0f19"      
+        self.bg_surface = "#111827"   
+        self.accent = "#3b82f6"       
+        self.accent_hover = "#2563eb" 
+        self.text_main = "#f8fafc"    
+        self.text_muted = "#94a3b8"   
         
         self.cached_vectorstore = None
         self.attached_media_path = None
         self.user_name = None
-        self.token_speed = 30 
+        self.token_speed = 25 
         self.current_session_id = str(uuid.uuid4())
         self.session_history = []
+        
+        # --- ANIMATION STATE VARIABLES ---
+        self.is_processing = False
+        self.pulse_index = 0
+        self.pulse_colors = ["#064e3b", "#065f46", "#047857", "#059669", "#10b981", "#34d399", "#10b981", "#059669", "#047857", "#065f46"]
+        self.think_step = 0
         
         self.load_save_data()
         self.apply_theme(self.theme_mode)
@@ -117,35 +122,67 @@ class SourceAgentWorkspace(ctk.CTk):
             self.text_main = "#0f172a"
             self.text_muted = "#64748b"
 
+    # --- V11 KINETIC BACKGROUND ---
     def draw_dynamic_background(self):
         self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg=self.bg_dark)
         self.bg_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
-        # Smoother, darker orbs for the enterprise feel
         self.orbs = [
             self.bg_canvas.create_oval(0, 0, 0, 0, outline="", fill="#172554"), 
-            self.bg_canvas.create_oval(0, 0, 0, 0, outline="", fill="#1e3a8a")
+            self.bg_canvas.create_oval(0, 0, 0, 0, outline="", fill="#1e3a8a"),
+            self.bg_canvas.create_oval(0, 0, 0, 0, outline="", fill="#0f172a"),
+            self.bg_canvas.create_oval(0, 0, 0, 0, outline="", fill="#1e40af")
         ]
         self.anim_step = 0
         self.animate_bg()
 
     def animate_bg(self):
-        # THE BUG FIX: If the canvas was destroyed by the UI transition, stop the loop immediately!
         if not hasattr(self, 'bg_canvas') or not self.bg_canvas.winfo_exists(): 
             return
             
         w, h = self.winfo_width(), self.winfo_height()
         if w > 100:
-            self.anim_step += 0.010 # Slower, more elegant wave
+            self.anim_step += 0.008 
+            
             x1 = (math.sin(self.anim_step) * (w/3)) + (w/2)
             y1 = (math.cos(self.anim_step * 0.7) * (h/3)) + (h/2)
-            self.bg_canvas.coords(self.orbs[0], x1-700, y1-700, x1+700, y1+700)
+            self.bg_canvas.coords(self.orbs[0], x1-800, y1-800, x1+800, y1+800)
             
             x2 = (math.cos(self.anim_step * 0.5) * (w/4)) + (w/2)
             y2 = (math.sin(self.anim_step * 0.8) * (h/4)) + (h/2)
-            self.bg_canvas.coords(self.orbs[1], x2-500, y2-500, x2+500, y2+500)
+            self.bg_canvas.coords(self.orbs[1], x2-600, y2-600, x2+600, y2+600)
+
+            x3 = (math.sin(self.anim_step * 1.2) * (w/5)) + (w/1.5)
+            y3 = (math.cos(self.anim_step * 0.4) * (h/4)) + (h/1.5)
+            self.bg_canvas.coords(self.orbs[2], x3-400, y3-400, x3+400, y3+400)
+
+            x4 = (math.cos(self.anim_step * 0.9) * (w/6)) + (w/4)
+            y4 = (math.sin(self.anim_step * 1.1) * (h/5)) + (h/4)
+            self.bg_canvas.coords(self.orbs[3], x4-500, y4-500, x4+500, y4+500)
             
         self.bg_canvas.lower("all")
         self.after(30, self.animate_bg)
+
+    # --- V11 PULSING STATUS LED ---
+    def pulse_status_led(self):
+        if not hasattr(self, 'status_bar') or not self.status_bar.winfo_exists():
+            return
+            
+        if not self.is_processing:
+            color = self.pulse_colors[self.pulse_index]
+            self.status_bar.configure(text="🟢 Compliance Engine Online", text_color=color)
+            self.pulse_index = (self.pulse_index + 1) % len(self.pulse_colors)
+            self.after(80, self.pulse_status_led)
+
+    # --- V11 ANIMATED PROCESSING INDICATOR ---
+    def animate_thinking(self):
+        if not hasattr(self, 'status_bar') or not self.status_bar.winfo_exists():
+            return
+            
+        if self.is_processing:
+            dots = "." * (self.think_step % 4)
+            self.status_bar.configure(text=f"⚡ Auditing Policies{dots}", text_color=self.accent)
+            self.think_step += 1
+            self.after(350, self.animate_thinking)
 
     def show_installer_wizard(self):
         self.wizard_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -238,7 +275,6 @@ class SourceAgentWorkspace(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         
-        # Refined Sidebar
         self.sidebar = ctk.CTkFrame(self, width=320, fg_color=self.bg_dark, corner_radius=0)
         self.sidebar.grid(row=0, column=0, sticky="nsew")
         ctk.CTkLabel(self.sidebar, text="🏛️ Policy Advisor", font=("Segoe UI", 24, "bold"), text_color=self.text_main).pack(pady=(35, 15), padx=25, anchor="w")
@@ -249,7 +285,6 @@ class SourceAgentWorkspace(ctk.CTk):
         self.source_count_lbl = ctk.CTkLabel(self.sidebar, text="0 Policies Loaded", font=("Segoe UI", 12), text_color=self.text_muted)
         self.source_count_lbl.pack(pady=(0, 25))
         
-        # Horizontal Divider
         divider = ctk.CTkFrame(self.sidebar, height=1, fg_color="#1f2937")
         divider.pack(fill="x", padx=20, pady=5)
         
@@ -258,13 +293,11 @@ class SourceAgentWorkspace(ctk.CTk):
         self.history_scroll = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent", height=450)
         self.history_scroll.pack(fill="x", padx=10, pady=5)
         
-        # Main Chat Area
         self.chat_frame = ctk.CTkFrame(self, fg_color=self.bg_surface, corner_radius=0, border_width=0)
         self.chat_frame.grid(row=0, column=1, sticky="nsew")
         self.chat_frame.grid_rowconfigure(0, weight=1)
         self.chat_frame.grid_columnconfigure(0, weight=1)
         
-        # Subtle header
         header = ctk.CTkFrame(self.chat_frame, height=60, fg_color=self.bg_surface, corner_radius=0)
         header.grid(row=0, column=0, sticky="ew")
         self.status_bar = ctk.CTkLabel(header, text="🟢 Compliance Engine Online", font=("Segoe UI", 13), text_color=self.text_muted)
@@ -274,7 +307,6 @@ class SourceAgentWorkspace(ctk.CTk):
         self.chat_display = ctk.CTkTextbox(self.chat_frame, state="disabled", font=("Segoe UI", 15), wrap="word", fg_color="transparent", text_color=self.text_main, spacing1=8, spacing3=8)
         self.chat_display.grid(row=1, column=0, sticky="nsew", padx=40, pady=(0, 20))
         
-        # Modern Input Bar
         input_container = ctk.CTkFrame(self.chat_frame, fg_color="transparent")
         input_container.grid(row=2, column=0, sticky="ew", padx=40, pady=(0, 30))
         input_container.grid_columnconfigure(0, weight=1)
@@ -292,6 +324,9 @@ class SourceAgentWorkspace(ctk.CTk):
         self.update_sidebar_history()
         self.update_source_count()
         self.load_active_chat()
+        
+        # Start the breathing LED animation
+        self.pulse_status_led()
 
     def load_local_vectorstore(self):
         index_path = os.path.join(SOURCE_DIR, "faiss_index")
@@ -355,11 +390,15 @@ class SourceAgentWorkspace(ctk.CTk):
             splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
             self.cached_vectorstore = FAISS.from_documents(splitter.split_documents(docs), self.embeddings)
             self.cached_vectorstore.save_local(index_path)
-            self.after(0, lambda: self.status_bar.configure(text="🟢 Database Active.", text_color="#10b981"))
         else:
             self.cached_vectorstore = None
-            self.after(0, lambda: self.status_bar.configure(text="Database Empty.", text_color=self.text_muted))
+            
         self.after(0, self.update_source_count)
+        self.after(0, lambda: self.status_bar.configure(text="🟢 Database Active.", text_color="#10b981"))
+        
+        # Restart breathing LED
+        self.is_processing = False
+        self.after(1000, self.pulse_status_led)
 
     def update_source_count(self):
         count = len([f for f in os.listdir(SOURCE_DIR) if f.endswith(('.pdf', '.txt', '.docx'))])
@@ -380,11 +419,16 @@ class SourceAgentWorkspace(ctk.CTk):
         self.chat_display.insert("end", f"👤 Inquiry: {q}\n\n")
         self.chat_display.configure(state="disabled")
         self.append_to_chat_history(f"👤 Inquiry: {q}\n\n")
+        
+        # Trigger the thinking animation
+        self.is_processing = True
+        self.think_step = 0
+        self.animate_thinking()
+        
         threading.Thread(target=self.process_query, args=(q,), daemon=True).start()
 
     def process_query(self, query):
         try:
-            self.after(0, lambda: self.status_bar.configure(text="🧠 Scanning Policies...", text_color=self.accent))
             context = ""
             if self.cached_vectorstore:
                 retrieved_docs = self.cached_vectorstore.as_retriever(search_kwargs={"k": 6}).invoke(query)
@@ -401,7 +445,10 @@ class SourceAgentWorkspace(ctk.CTk):
             else:
                 messages.append(HumanMessage(content=final_query))
 
-            self.after(0, lambda: self.status_bar.configure(text="⚡ Auditing...", text_color=self.accent))
+            # Stop thinking animation and start streaming
+            self.is_processing = False
+            self.after(0, lambda: self.status_bar.configure(text="⚡ Streaming Response...", text_color=self.accent))
+            
             self.after(0, lambda: self.chat_display.configure(state="normal"))
             self.after(0, lambda: self.chat_display.insert("end", "🏛️ Policy Advisor: "))
             
@@ -416,7 +463,6 @@ class SourceAgentWorkspace(ctk.CTk):
             
             self.after(0, lambda: self.chat_display.insert("end", "\n\n" + "-"*40 + "\n\n"))
             self.after(0, lambda: self.chat_display.configure(state="disabled"))
-            self.after(0, lambda: self.status_bar.configure(text="🟢 Compliance Engine Online", text_color=self.text_muted))
             
             self.append_to_chat_history(full_response + "\n\n" + "-"*40 + "\n\n")
             
@@ -427,7 +473,11 @@ class SourceAgentWorkspace(ctk.CTk):
 
         except Exception as e: 
             self.after(0, lambda: messagebox.showerror("Engine Failure", f"The compliance engine encountered an error.\n\n{str(e)}"))
-            self.after(0, lambda: self.status_bar.configure(text="🟢 Compliance Engine Online", text_color=self.text_muted))
+        
+        finally:
+            # Safely restore the breathing LED
+            self.is_processing = False
+            self.after(500, self.pulse_status_led)
 
     def append_to_chat_history(self, text):
         with open(os.path.join(HISTORY_DIR, f"{self.current_session_id}.txt"), "a", encoding="utf-8") as f: 
@@ -498,7 +548,7 @@ class SourceAgentWorkspace(ctk.CTk):
                     d = json.load(f)
                     self.user_name = d.get("user_name")
                     self.theme_mode = d.get("theme_mode", "Dark")
-                    self.token_speed = d.get("token_speed", 30) 
+                    self.token_speed = d.get("token_speed", 25) 
                     self.session_history = d.get("history", [])
                     if self.session_history: 
                         self.current_session_id = self.session_history[0]['id']
