@@ -341,4 +341,120 @@ class SourceAgentWorkspace(ctk.CTk):
 
     def process_query(self, query):
         try:
-            self.after(
+            self.after(0, lambda: self.status_bar.configure(text="🧠 Scanning Policies...", text_color=self.accent))
+            context = ""
+            if self.cached_vectorstore:
+                retrieved_docs = self.cached_vectorstore.as_retriever(search_kwargs={"k": 6}).invoke(query)
+                context = "\n".join([d.page_content for d in retrieved_docs])
+
+            messages = [SystemMessage(content=POLICY_ADVISOR_SYSTEM_PROMPT)]
+            final_query = f"Available Policy Documents:\n{context}\n\nUser Scenario/Question: {query}" if context else f"User Scenario/Question: {query}"
+
+            if self.attached_media_path:
+                with open(self.attached_media_path, "rb") as f: b64 = base64.b64encode(f.read()).decode('utf-8')
+                self.attached_media_path = None
+                messages.append(HumanMessage(content=[{"type": "text", "text": final_query}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}]))
+            else:
+                messages.append(HumanMessage(content=final_query))
+
+            self.after(0, lambda: self.status_bar.configure(text="⚡ Auditing...", text_color=self.accent))
+            self.after(0, lambda: self.chat_display.configure(state="normal"))
+            self.after(0, lambda: self.chat_display.insert("end", "🏛️ Policy Advisor: "))
+            
+            full_response = "🏛️ Policy Advisor: "
+            stream = self.editor_engine.stream(messages)
+            
+            for chunk in stream:
+                full_response += chunk.content
+                self.after(0, lambda c=chunk.content: self.chat_display.insert("end", c))
+                if self.token_speed > 0: time.sleep(self.token_speed / 1000.0) 
+            
+            self.after(0, lambda: self.chat_display.insert("end", "\n\n"))
+            self.after(0, lambda: self.chat_display.configure(state="disabled"))
+            self.after(0, lambda: self.status_bar.configure(text="🟢 Compliance Engine Online", text_color=self.text_muted))
+            
+            self.append_to_chat_history(full_response + "\n\n")
+            
+            if len(self.session_history) == 0 or self.session_history[0]['id'] != self.current_session_id:
+                self.session_history.insert(0, {'id': self.current_session_id, 'title': query[:20] + "..." if len(query) > 20 else query})
+                self.save_current_state()
+                self.after(0, self.update_sidebar_history)
+
+        except Exception as e: 
+            self.after(0, lambda: messagebox.showerror("Matrix Error", f"Engine failed.\n\n{str(e)}"))
+            self.after(0, lambda: self.status_bar.configure(text="🟢 Compliance Engine Online", text_color=self.text_muted))
+
+    def append_to_chat_history(self, text):
+        with open(os.path.join(HISTORY_DIR, f"{self.current_session_id}.txt"), "a", encoding="utf-8") as f: f.write(text)
+
+    def load_active_chat(self):
+        self.chat_display.configure(state="normal")
+        self.chat_display.delete("1.0", "end")
+        hf = os.path.join(HISTORY_DIR, f"{self.current_session_id}.txt")
+        if os.path.exists(hf):
+            with open(hf, "r", encoding="utf-8") as f: self.chat_display.insert("end", f.read())
+        self.chat_display.configure(state="disabled")
+
+    def switch_session(self, session_id):
+        self.current_session_id = session_id
+        self.load_active_chat()
+
+    def start_new_session(self):
+        self.current_session_id = str(uuid.uuid4())
+        self.load_active_chat()
+
+    def update_sidebar_history(self):
+        for w in self.history_scroll.winfo_children(): w.destroy()
+        for item in self.session_history: 
+            ctk.CTkButton(self.history_scroll, text=item['title'], fg_color="transparent", anchor="w", command=lambda sid=item['id']: self.switch_session(sid)).pack(fill="x", pady=2)
+
+    def open_settings_menu(self):
+        win = ctk.CTkToplevel(self)
+        win.title("Options")
+        win.geometry("450x450")
+        win.attributes("-topmost", True)
+        win.configure(fg_color=self.bg_surface)
+        
+        ctk.CTkLabel(win, text="⚙️ Configuration", font=("Segoe UI", 22, "bold"), text_color=self.text_main).pack(pady=(20, 20))
+        ctk.CTkLabel(win, text="UI Theme:", text_color=self.text_muted).pack()
+        theme_menu = ctk.CTkOptionMenu(win, values=["Dark", "Light"], command=lambda v: [self.apply_theme(v), self.save_current_state()])
+        theme_menu.set(self.theme_mode)
+        theme_menu.pack(pady=(5, 20))
+        
+        ctk.CTkLabel(win, text="AI Response Stream Delay (ms):", text_color=self.text_muted).pack()
+        def update_speed_lbl(val): speed_val_lbl.configure(text=f"{int(val)} ms")
+        def save_speed(val): self.token_speed = int(val); self.save_current_state()
+        slider = ctk.CTkSlider(win, from_=0, to=100, command=update_speed_lbl)
+        slider.set(self.token_speed)
+        slider.pack(pady=10)
+        speed_val_lbl = ctk.CTkLabel(win, text=f"{int(self.token_speed)} ms", font=("Segoe UI", 14, "bold"), text_color=self.accent)
+        speed_val_lbl.pack(pady=(0, 20))
+        slider.configure(command=lambda v: [update_speed_lbl(v), save_speed(v)])
+        
+        def nuke_history():
+            if messagebox.askyesno("Confirm Data Wipe", "Delete all inquiry history?"):
+                for f in os.listdir(HISTORY_DIR): os.remove(os.path.join(HISTORY_DIR, f))
+                self.session_history = []
+                self.save_current_state()
+                self.start_new_session()
+                self.update_sidebar_history()
+        ctk.CTkButton(win, text="🧨 Purge Inquiry Log", fg_color="#e74c3c", hover_color="#c0392b", command=nuke_history).pack(pady=20)
+
+    def load_save_data(self):
+        if os.path.exists(SAVE_FILE):
+            try:
+                with open(SAVE_FILE, "r") as f:
+                    d = json.load(f)
+                    self.user_name = d.get("user_name")
+                    self.theme_mode = d.get("theme_mode", "Dark")
+                    self.token_speed = d.get("token_speed", 30) 
+                    self.session_history = d.get("history", [])
+                    if self.session_history: self.current_session_id = self.session_history[0]['id']
+            except: pass
+
+    def save_current_state(self):
+        with open(SAVE_FILE, "w") as f:
+            json.dump({"user_name": self.user_name, "theme_mode": self.theme_mode, "token_speed": self.token_speed, "history": self.session_history}, f)
+
+app = SourceAgentWorkspace()
+app.mainloop()
