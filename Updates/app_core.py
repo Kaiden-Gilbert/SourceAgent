@@ -21,18 +21,18 @@ ENV_FILE = os.path.join(BASE_DIR, ".env")
 os.makedirs(SOURCE_DIR, exist_ok=True)
 os.makedirs(HISTORY_DIR, exist_ok=True)
 
-# --- THE COMPLIANCE DIRECTIVE ---
-SYSTEM_PROMPT = """You are "Policy Advisor 2026." 
-1. Answer strictly by referencing company policies.
-2. Identify the policy name and section.
-3. Quote verbatim the exact excerpt(s).
-4. Clearly separate quotes from your plain English explanation.
-5. Apply policy to the specific situation.
-6. Prioritise legal/regulatory risks (Bribery, Data, Safeguarding).
-7. If no policy is found, ask 2 clarifying questions before admitting no policy could be located.
-NO opinions, NO external knowledge. TONE: Professional & Precise."""
+# --- THE COMPLIANCE DIRECTIVE (STRICT LOCKDOWN) ---
+SYSTEM_PROMPT = """You are "Policy Advisor 2026", an enterprise compliance AI.
+You have ONE job: Answer questions using ONLY the provided policy documents.
 
-class PolicyAdvisorV16(ctk.CTk):
+CRITICAL RULES:
+1. NEVER invent, guess, or hallucinate information. If the answer is not in the text, you must say "I cannot find a policy regarding this."
+2. Quote the exact policy name, section, and text verbatim.
+3. Separate your plain English explanation from the quotes.
+4. Keep your tone clinical, professional, and precise. 
+5. Do not ramble. Do not output gibberish. Use clear, structured formatting."""
+
+class PolicyAdvisorV17(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Policy Advisor 2026 | Enterprise Edition")
@@ -40,8 +40,8 @@ class PolicyAdvisorV16(ctk.CTk):
         
         # --- THEME & CONFIG DEFAULT STATES ---
         self.theme_mode = "Dark"
-        self.ai_model = "google/gemini-flash-1.5-8b"
-        self.ai_temp = 0.2
+        self.ai_model = "google/gemini-1.5-flash:free"
+        self.ai_temp = 0.1 # Locked down to prevent hallucinations
         self.ai_max_tokens = 1024
         self.bg_deep = "#020617"
         self.bg_surface = "#0f172a"
@@ -83,13 +83,11 @@ class PolicyAdvisorV16(ctk.CTk):
         self.animate_bg()
 
     def animate_bg(self):
-        # Strict Failsafe: Stop animation if the window is destroyed
         if not hasattr(self, 'bg_canvas') or not self.bg_canvas.winfo_exists(): return
             
         w, h = self.winfo_width(), self.winfo_height()
         if w > 100:
             self.anim_step += 0.015 
-            
             x1 = (math.sin(self.anim_step) * (w/3)) + (w/2)
             y1 = (math.cos(self.anim_step * 0.7) * (h/3)) + (h/2)
             self.bg_canvas.coords(self.orbs[0], x1-700, y1-700, x1+700, y1+700)
@@ -148,7 +146,7 @@ class PolicyAdvisorV16(ctk.CTk):
 
         self.chat = ctk.CTkTextbox(work_area, font=("Segoe UI", 15), fg_color="transparent", spacing1=8, spacing3=8)
         self.chat.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
-        self.chat.insert("1.0", "SYSTEM: Secure connection established. Ready for inquiry.\n\n")
+        self.chat.insert("1.0", "SYSTEM: Secure connection established. Strict Compliance Protocol enabled.\n\n")
         self.chat.configure(state="disabled")
         
         input_bar = ctk.CTkFrame(work_area, fg_color="#1e293b", corner_radius=10)
@@ -162,25 +160,24 @@ class PolicyAdvisorV16(ctk.CTk):
         ctk.CTkButton(input_bar, text="Submit", width=100, height=40, font=("Segoe UI", 14, "bold"), fg_color=self.accent, command=self.send).grid(row=0, column=1, padx=10, pady=5)
 
     # ==========================================
-    # FAILSAFE AI ARCHITECTURE
+    # FAILSAFE AI ARCHITECTURE (STRICT)
     # ==========================================
     def build_ai_engine(self):
         if not self.api_key: return
-        base = "https://openrouter.ai/api/v1"
         try:
             self.llm = ChatOpenAI(
-                base_url=base, 
+                base_url="https://openrouter.ai/api/v1", 
                 api_key=self.api_key, 
                 model=self.ai_model,
                 temperature=self.ai_temp,
                 max_tokens=self.ai_max_tokens,
+                top_p=0.85, # The mathematical filter that stops word salad
                 streaming=True
             )
         except Exception as e:
             self.safe_ui_update(f"\n[ENGINE BUILD ERROR: {str(e)}]\n")
 
     def process_queue(self):
-        # Safely pulls text from the background thread and draws it to the UI
         try:
             while True:
                 chunk = self.text_queue.get_nowait()
@@ -201,8 +198,6 @@ class PolicyAdvisorV16(ctk.CTk):
         self.entry.delete(0, "end")
         self.safe_ui_update(f"\nUSER: {q}\n\nADVISOR: ")
         self.status_lbl.configure(text="● Auditing Database...", text_color="#f59e0b")
-        
-        # Isolate the generation in a background thread so the UI never freezes
         threading.Thread(target=self.generate_response, args=(q,), daemon=True).start()
 
     def generate_response(self, q):
@@ -214,7 +209,6 @@ class PolicyAdvisorV16(ctk.CTk):
             
             msgs = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=f"Context:\n{context}\n\nInquiry: {q}")]
             
-            # Stream the response safely to the Queue
             for chunk in self.llm.stream(msgs):
                 self.safe_ui_update(chunk.content)
             
@@ -265,31 +259,28 @@ class PolicyAdvisorV16(ctk.CTk):
         win.title("Advanced Configuration")
         win.geometry("450x550")
         win.attributes("-topmost", True)
-        win.attributes("-alpha", 0.0) # Start invisible for animation
+        win.attributes("-alpha", 0.0) 
         win.configure(fg_color=self.bg_surface)
         
         self.fade_in_window(win)
-        
         ctk.CTkLabel(win, text="Engine Configuration", font=("Segoe UI", 22, "bold")).pack(pady=(20, 20))
         
-        # Model Selection
         ctk.CTkLabel(win, text="AI Core Model:", font=("Segoe UI", 12)).pack(anchor="w", padx=40)
-        models = ["google/gemini-flash-1.5-8b", "meta-llama/llama-3.1-8b-instruct", "google/gemini-2.0-flash-lite-preview-02-05:free"]
+        models = ["google/gemini-1.5-flash:free", "meta-llama/llama-3.3-70b-instruct:free", "google/gemini-2.0-flash-lite-preview-02-05:free"]
         model_menu = ctk.CTkOptionMenu(win, values=models, width=370)
         model_menu.set(self.ai_model)
         model_menu.pack(pady=(5, 20))
         
-        # Temperature
-        ctk.CTkLabel(win, text="Creativity (Temperature):", font=("Segoe UI", 12)).pack(anchor="w", padx=40)
+        # LOCKED DOWN TEMPERATURE SLIDER
+        ctk.CTkLabel(win, text="Creativity (Locked Max 0.7):", font=("Segoe UI", 12)).pack(anchor="w", padx=40)
         temp_val = ctk.CTkLabel(win, text=str(self.ai_temp), font=("Segoe UI", 12, "bold"), text_color=self.accent)
         temp_val.pack()
-        temp_slider = ctk.CTkSlider(win, from_=0.0, to=1.5, number_of_steps=15, width=370)
+        temp_slider = ctk.CTkSlider(win, from_=0.0, to=0.7, number_of_steps=14, width=370)
         temp_slider.set(self.ai_temp)
         temp_slider.pack(pady=(5, 20))
-        def update_temp(v): temp_val.configure(text=f"{v:.1f}")
+        def update_temp(v): temp_val.configure(text=f"{v:.2f}")
         temp_slider.configure(command=update_temp)
         
-        # Max Tokens
         ctk.CTkLabel(win, text="Response Length (Max Tokens):", font=("Segoe UI", 12)).pack(anchor="w", padx=40)
         tok_val = ctk.CTkLabel(win, text=str(self.ai_max_tokens), font=("Segoe UI", 12, "bold"), text_color=self.accent)
         tok_val.pack()
@@ -299,13 +290,12 @@ class PolicyAdvisorV16(ctk.CTk):
         def update_tok(v): tok_val.configure(text=f"{int(v)}")
         tok_slider.configure(command=update_tok)
 
-        # Apply Button
         def apply_changes():
             self.ai_model = model_menu.get()
             self.ai_temp = float(temp_slider.get())
             self.ai_max_tokens = int(tok_slider.get())
             self.save_settings()
-            self.build_ai_engine() # Rebuild LangChain with new settings
+            self.build_ai_engine() 
             win.destroy()
             
         ctk.CTkButton(win, text="Apply & Reboot Engine", fg_color=self.accent, height=40, font=("Segoe UI", 14, "bold"), command=apply_changes).pack(pady=(20, 0))
@@ -315,19 +305,15 @@ class PolicyAdvisorV16(ctk.CTk):
             try:
                 with open(SAVE_FILE, "r") as f:
                     d = json.load(f)
-                    self.ai_model = d.get("ai_model", "google/gemini-flash-1.5-8b")
-                    self.ai_temp = d.get("ai_temp", 0.2)
+                    self.ai_model = d.get("ai_model", "google/gemini-1.5-flash:free")
+                    self.ai_temp = d.get("ai_temp", 0.1) # Forced low default
                     self.ai_max_tokens = d.get("ai_max_tokens", 1024)
             except: pass
 
     def save_settings(self):
         with open(SAVE_FILE, "w") as f:
-            json.dump({
-                "ai_model": self.ai_model,
-                "ai_temp": self.ai_temp,
-                "ai_max_tokens": self.ai_max_tokens
-            }, f)
+            json.dump({"ai_model": self.ai_model, "ai_temp": self.ai_temp, "ai_max_tokens": self.ai_max_tokens}, f)
 
 if __name__ == "__main__":
-    app = PolicyAdvisorV16()
+    app = PolicyAdvisorV17()
     app.mainloop()
