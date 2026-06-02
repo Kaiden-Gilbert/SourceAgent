@@ -21,7 +21,6 @@ os.makedirs(SOURCE_DIR, exist_ok=True)
 OLLAMA_INSTALLER_URL = "https://ollama.com/download/OllamaSetup.exe"
 
 # --- SYSTEM PROMPT DESIGNED FOR TINYLLAMA ---
-# Highly repetitive, direct, and simple to ensure a 1.1B model obeys the boundaries.
 STRICT_TINYLLAMA_PROMPT = """You are a strict reading assistant.
 You must ONLY use the provided facts inside the Context section below.
 If the answer is not directly stated in the Context, say exactly: "I cannot find this information in the provided sources."
@@ -56,30 +55,32 @@ class ProvisionerWindow(ctk.CTkToplevel):
     def disable_close(self): pass
 
     def download_and_install_ollama(self):
-        self.lbl.configure(text="Downloading Ollama Engine...")
+        self.after(0, lambda: self.lbl.configure(text="Downloading Ollama Engine..."))
         installer_path = os.path.join(BASE_DIR, "OllamaSetup.exe")
         
         try:
             urllib.request.urlretrieve(OLLAMA_INSTALLER_URL, installer_path)
-            self.lbl.configure(text="Installing Engine (Check Taskbar)...")
-            self.sub_lbl.configure(text="Please finish the setup wizard that popped up on your screen.")
+            self.after(0, lambda: self.lbl.configure(text="Installing Engine (Check Taskbar)..."))
+            self.after(0, lambda: self.sub_lbl.configure(text="Please finish the setup wizard that popped up on your screen."))
             
             subprocess.run([installer_path], check=True)
             if os.path.exists(installer_path):
                 os.remove(installer_path)
             
-            self.lbl.configure(text="Installation Finished!")
+            self.after(0, lambda: self.lbl.configure(text="Installation Finished!"))
             time.sleep(2)
-            self.destroy()
-            self.master_app.check_environment()
+            
+            # Safely route UI teardown and boot sequence to the main thread
+            self.after(0, self.destroy)
+            self.after(0, self.master_app.check_environment)
             
         except Exception as e:
-            messagebox.showerror("Setup Failed", f"Could not auto-install Ollama: {e}\nPlease run it manually from ollama.com")
-            sys.exit(1)
+            self.after(0, lambda: messagebox.showerror("Setup Failed", f"Could not auto-install Ollama: {e}\nPlease run it manually from ollama.com"))
+            self.after(0, lambda: sys.exit(1))
 
     def pull_tinyllama(self):
-        self.lbl.configure(text="Pulling TinyLlama Core...")
-        self.sub_lbl.configure(text="Downloading model parameters (~650MB) directly to your local drive.")
+        self.after(0, lambda: self.lbl.configure(text="Pulling TinyLlama Core..."))
+        self.after(0, lambda: self.sub_lbl.configure(text="Downloading model parameters (~650MB) directly to your local drive."))
         try:
             startupinfo = None
             if os.name == 'nt':
@@ -87,11 +88,14 @@ class ProvisionerWindow(ctk.CTkToplevel):
                 startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
 
             subprocess.run(["ollama", "pull", "tinyllama"], check=True, startupinfo=startupinfo)
-            self.destroy()
-            self.master_app.finish_boot()
+            
+            # Safely route UI teardown and boot sequence to the main thread
+            self.after(0, self.destroy)
+            self.after(0, self.master_app.finish_boot)
+            
         except Exception as e:
-            messagebox.showerror("Download Failed", f"Ollama failed to pull tinyllama: {e}")
-            sys.exit(1)
+            self.after(0, lambda: messagebox.showerror("Download Failed", f"Ollama failed to pull tinyllama: {e}"))
+            self.after(0, lambda: sys.exit(1))
 
 
 class AnalyticsWindow(ctk.CTkToplevel):
@@ -135,13 +139,15 @@ class AnalyticsWindow(ctk.CTkToplevel):
 class SourceAgentMaster(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Source Agent | TinyLlama Sovereign Engine V39")
+        self.title("Source Agent | TinyLlama Sovereign Engine V39.1")
         self.geometry("1150x750")
         ctk.set_appearance_mode("Dark")
         
         self.ai_model = "tinyllama"
         self.withdraw()
-        self.check_environment()
+        
+        # Give the mainloop 100ms to stabilize before blocking the thread with subprocess checks
+        self.after(100, self.check_environment)
 
     def check_environment(self):
         # Verify if Ollama exists as an executable command
@@ -180,7 +186,6 @@ class SourceAgentMaster(ctk.CTk):
         ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 22, "bold")).pack(pady=(30, 10))
         ctk.CTkLabel(s, text="🔒 100% Offline Air-Gapped Mode", font=("Segoe UI", 11), text_color="#10b981").pack(pady=(0, 25))
         
-        # Static indicator showing TinyLlama is locked in
         info_frame = ctk.CTkFrame(s, fg_color="#0f172a", height=60)
         info_frame.pack(fill="x", padx=20, pady=10)
         ctk.CTkLabel(info_frame, text="Active Core: TinyLlama (1.1B)", font=("Segoe UI", 12, "bold"), text_color="#3b82f6").place(relx=0.5, rely=0.3, anchor="center")
@@ -229,18 +234,15 @@ class SourceAgentMaster(ctk.CTk):
         self.safe_insert(f"\nUSER: {q}\nAGENT: Inquiring localized text embeddings...\n")
         
         try:
-            # Temperature=0.0 stops TinyLlama from being creative or straying from context boundaries
             llm = ChatOllama(model=self.ai_model, temperature=0.0, base_url="http://localhost:11434")
             context = ""
             sources_list = []
             
             if self.db:
-                # We limit k=4 chunks so TinyLlama isn't overwhelmed by massive context files
                 docs = self.db.as_retriever(search_kwargs={"k": 4}).invoke(q)
                 context = "\n\n".join([f"Document Chunk:\n{d.page_content}" for d in docs])
                 sources_list = list(set([d.metadata.get('source', 'Unknown') for d in docs]))
                 
-            # Formatting text structures explicitly for small models
             structured_query = f"Context:\n{context}\n\nQuestion: {q}"
             
             final_resp = llm.invoke([
