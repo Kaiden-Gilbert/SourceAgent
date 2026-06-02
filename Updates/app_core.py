@@ -1,317 +1,168 @@
-import os, sys, threading, subprocess, json, time, textwrap
+import os, sys, threading, shutil, json, time
 import tkinter as tk
-from tkinter import messagebox
+from tkinter import filedialog, messagebox
 import customtkinter as ctk
+from collections import Counter
 
-try:
-    import requests
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "requests", "fastapi", "uvicorn"])
-    import requests
-
-# --- CONFIGURATION ---
-BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
-SERVER_DIR = os.path.join(BASE_DIR, "Microservices")
-SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
-SAVE_FILE = os.path.join(BASE_DIR, "config.json")
-
-for d in [SERVER_DIR, SOURCE_DIR]:
-    os.makedirs(d, exist_ok=True)
-
-# ==========================================
-# PART 1: THE NETWORKED BACKEND SERVER
-# ==========================================
-BACKEND_CODE = textwrap.dedent(f"""\
-import os, shutil, time
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from pydantic import BaseModel
-import uvicorn
-from typing import List, Dict
 from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
+from dotenv import load_dotenv
 
-app = FastAPI(title="Source Agent Nexus Brain")
+# --- CONFIGURATION ---
+BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
+SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
+ENV_FILE = os.path.join(BASE_DIR, ".env")
+AUDIT_FILE = os.path.join(BASE_DIR, "audit_log.json")
+SAVE_FILE = os.path.join(BASE_DIR, "config.json")
+os.makedirs(SOURCE_DIR, exist_ok=True)
 
-SOURCE_DIR = r"{SOURCE_DIR}"
-INDEX_DIR = os.path.join(SOURCE_DIR, "faiss_index")
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+# --- PROMPT ARCHITECTURE ---
+STANDARD_PROMPT = """You are Source Agent. Answer strictly using provided policy docs. Quote verbatim where applicable. If missing, state: 'I cannot find a policy regarding this.'"""
 
-connected_users = set()
-message_queue: List[Dict] = []
-
-class QueryRequest(BaseModel):
-    query: str
-    api_key: str
-    model: str
-    persona: str
-
-class MessageRequest(BaseModel):
-    sender: str
-    target: str
-    message: str
-
-def get_db():
-    if os.path.exists(INDEX_DIR):
-        try: return FAISS.load_local(INDEX_DIR, embeddings, allow_dangerous_deserialization=True)
-        except: return None
-    return None
-
-@app.get("/ping")
-def ping(): return {{"status": "online"}}
-
-@app.post("/register/{{username}}")
-def register(username: str):
-    connected_users.add(username)
-    return {{"status": "registered"}}
-
-@app.post("/send_message/")
-def send_message(req: MessageRequest):
-    message_queue.append({{"id": time.time(), "sender": req.sender, "target": req.target, "msg": req.message}})
-    if len(message_queue) > 100: message_queue.pop(0)
-    return {{"status": "sent"}}
-
-@app.get("/poll_messages/{{username}}/{{last_id}}")
-def poll_messages(username: str, last_id: float):
-    new_msgs = [m for m in message_queue if m['id'] > last_id and (m['target'] == 'all' or m['target'] == username)]
-    return {{"messages": new_msgs}}
-
-@app.post("/ingest/")
-async def ingest_document(file: UploadFile = File(...)):
-    file_path = os.path.join(SOURCE_DIR, file.filename)
-    with open(file_path, "wb") as f: shutil.copyfileobj(file.file, f)
-    docs = PyMuPDFLoader(file_path).load()
-    splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=200)
-    split_docs = splitter.split_documents(docs)
-    for d in split_docs: d.metadata['source'] = os.path.basename(d.metadata.get('source', 'Unknown'))
-    db = get_db()
-    if db: db.add_documents(split_docs)
-    else: db = FAISS.from_documents(split_docs, embeddings)
-    db.save_local(INDEX_DIR)
-    return {{"status": "indexed"}}
-
-@app.post("/agentic_query/")
-async def agentic_query(req: QueryRequest):
-    db = get_db()
-    if not db: raise HTTPException(status_code=400, detail="No sources indexed.")
-    
-    personas = {{
-        "Policy Strict": "You are a strict compliance advisor. Use ONLY provided context. Quote verbatim.",
-        "Creative Brainstorm": "You are a strategic consultant. Use context to brainstorm expansive ideas.",
-        "Code Reviewer": "You are a senior developer. Analyze the context for technical accuracy."
-    }}
-    
-    try:
-        llm = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=req.api_key, model=req.model, temperature=0.1)
-        docs = db.as_retriever(search_kwargs={{"k": 5}}).invoke(req.query)
-        context = "\\n\\n".join([f"Source: {{d.metadata.get('source')}}\\n{{d.page_content}}" for d in docs])
-        sources = list(set([d.metadata.get('source') for d in docs]))
-        
-        final_resp = llm.invoke([SystemMessage(content=personas.get(req.persona, personas["Policy Strict"])), HumanMessage(content=f"Context:\\n{{context}}\\n\\nQuery: {{req.query}}")]).content
-        return {{"answer": final_resp, "sources": sources}}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8050, log_level="info")
-""")
-
-SERVER_FILE = os.path.join(SERVER_DIR, "backend_engine.py")
-with open(SERVER_FILE, "w", encoding="utf-8") as f:
-    f.write(BACKEND_CODE)
+RESEARCH_PROMPT = """You are an Enterprise Research Analyst. 
+Conduct a Deep Research synthesis on the provided context. 
+1. Identify all core concepts related to the query.
+2. Compare evidence across multiple sources if applicable.
+3. Generate a highly detailed, structured Executive Report using headings and bullet points.
+4. Ensure every factual claim is grounded in the text."""
 
 # ==========================================
-# PART 2: THE UNIFIED DESKTOP CLIENT
+# WINDOW CLASS: ANALYTICS DASHBOARD
 # ==========================================
-class GradientFrame(tk.Canvas):
-    def __init__(self, master, color1, color2, **kwargs):
-        super().__init__(master, **kwargs)
-        self.color1 = color1
-        self.color2 = color2
-        self.bind('<Configure>', self._draw_gradient)
-
-    def _draw_gradient(self, event=None):
-        self.delete("gradient")
-        width = self.winfo_width()
-        height = self.winfo_height()
-        if width <= 1 or height <= 1: return
-        r1, g1, b1 = self.winfo_rgb(self.color1)
-        r2, g2, b2 = self.winfo_rgb(self.color2)
-        r_ratio = (r2 - r1) / height
-        g_ratio = (g2 - g1) / height
-        b_ratio = (b2 - b1) / height
+class AnalyticsWindow(ctk.CTkToplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Enterprise Analytics Dashboard")
+        self.geometry("600x500")
+        self.attributes("-topmost", True)
         
-        for i in range(height):
-            nr = max(0, min(255, int(r1 + (r_ratio * i)) >> 8))
-            ng = max(0, min(255, int(g1 + (g_ratio * i)) >> 8))
-            nb = max(0, min(255, int(b1 + (b_ratio * i)) >> 8))
-            self.create_line(0, i, width, i, tags=("gradient",), fill=f"#{nr:02x}{ng:02x}{nb:02x}")
-        self.lower("gradient")
-
-class NotificationToast(ctk.CTkFrame):
-    def __init__(self, parent, title, message, color="#3b82f6"):
-        super().__init__(parent, fg_color="#1e293b", border_width=2, border_color=color, corner_radius=8)
-        ctk.CTkLabel(self, text=title, font=("Segoe UI", 14, "bold"), text_color=color).pack(anchor="w", padx=15, pady=(10, 0))
-        ctk.CTkLabel(self, text=message, font=("Segoe UI", 12), justify="left", wraplength=250).pack(anchor="w", padx=15, pady=(0, 10))
-        self.place(relx=0.5, rely=-0.2, anchor="n")
-        self.animate_in(0)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=1)
         
-    def animate_in(self, step):
-        if step < 20:
-            self.place(relx=0.5, rely=-0.2 + (step * 0.012), anchor="n")
-            self.after(15, lambda: self.animate_in(step + 1))
-        else: self.after(4000, self.animate_out, 0)
+        ctk.CTkLabel(self, text="📊 System Analytics", font=("Segoe UI", 24, "bold"), text_color="#3b82f6").pack(pady=(20, 10))
+        
+        self.stats_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.stats_frame.pack(fill="x", padx=20, pady=10)
+        
+        self.log_box = ctk.CTkTextbox(self, font=("Consolas", 13), fg_color="#0f172a")
+        self.log_box.pack(fill="both", expand=True, padx=20, pady=(0, 20))
+        
+        self.load_analytics()
+
+    def load_analytics(self):
+        if not os.path.exists(AUDIT_FILE):
+            self.log_box.insert("1.0", "No audit data found. Start querying to generate analytics.")
+            self.log_box.configure(state="disabled")
+            return
             
-    def animate_out(self, step):
-        if step < 20:
-            self.place(relx=0.5, rely=0.04 - (step * 0.012), anchor="n")
-            self.after(15, lambda: self.animate_out(step + 1))
-        else: self.destroy()
+        try:
+            with open(AUDIT_FILE, "r") as f:
+                logs = json.load(f)
+                
+            total_queries = len(logs)
+            successful = sum(1 for log in logs if log.get("status") == "Success")
+            success_rate = (successful / total_queries * 100) if total_queries > 0 else 0
+            
+            # Extract all sources used
+            all_sources = []
+            for log in logs:
+                sources = log.get("sources", [])
+                if isinstance(sources, list):
+                    all_sources.extend(sources)
+            
+            top_sources = Counter(all_sources).most_common(5)
+            
+            # Display Top Stats
+            ctk.CTkLabel(self.stats_frame, text=f"Total Queries: {total_queries}", font=("Segoe UI", 16, "bold")).pack(side="left", padx=20)
+            ctk.CTkLabel(self.stats_frame, text=f"Success Rate: {success_rate:.1f}%", font=("Segoe UI", 16, "bold"), text_color="#10b981").pack(side="right", padx=20)
+            
+            # Display Source Leaderboard
+            report = "--- TOP REFERENCED DOCUMENTS ---\n\n"
+            for src, count in top_sources:
+                report += f"[{count} references] -> {src}\n"
+                
+            report += "\n--- RECENT AUDIT TRAIL ---\n\n"
+            for log in reversed(logs[-10:]): # Show last 10
+                report += f"[{log.get('timestamp', 'Unknown')[:16]}] Query: {log.get('query')}\n"
+                
+            self.log_box.insert("1.0", report)
+            self.log_box.configure(state="disabled")
+            
+        except Exception as e:
+            self.log_box.insert("1.0", f"Error loading analytics: {e}")
 
-class SourceAgentClient(ctk.CTk):
+# ==========================================
+# MAIN APPLICATION ENGINE
+# ==========================================
+class SourceAgentMaster(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Source Agent | Nexus V34.1")
-        self.geometry("1250x800")
+        self.title("Source Agent | Enterprise Monolith V37")
+        self.geometry("1200x800")
         ctk.set_appearance_mode("Dark")
         
-        # Application State Variables
         self.api_key = ""
         self.ai_model = "google/gemini-1.5-flash:free"
-        self.persona = "Policy Strict"
-        self.username = ""
-        self.server_ip = "127.0.0.1"
-        self.api_base = f"http://{self.server_ip}:8050"
-        self.last_msg_id = time.time()
-        self.server_process = None
-        
         self.load_settings()
-        self.autonomous_server_boot()
         
-        self.main_container = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_container.pack(fill="both", expand=True)
-        
-        self.show_login_view()
+        load_dotenv(ENV_FILE)
+        if not self.api_key:
+            self.api_key = os.environ.get("OPENROUTER_API_KEY", "")
+            
+        self.setup_ui()
+        self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        self.db = None
+        self.load_db()
 
-    def autonomous_server_boot(self):
-        """Attempts to spin up a local node in the background, just in case they want a local server."""
-        try:
-            requests.get("http://127.0.0.1:8050/ping", timeout=1)
-        except:
-            if os.name == 'nt':
-                self.server_process = subprocess.Popen(
-                    [sys.executable, SERVER_FILE], 
-                    creationflags=subprocess.CREATE_NEW_CONSOLE
-                )
-            else:
-                self.server_process = subprocess.Popen([sys.executable, SERVER_FILE])
-
-    # ==========================================
-    # VIEW SYSTEM: LOGIN SCREEN
-    # ==========================================
-    def show_login_view(self):
-        self.login_bg = GradientFrame(self.main_container, "#020617", "#1e3a8a", highlightthickness=0)
-        self.login_bg.place(relx=0, rely=0, relwidth=1, relheight=1)
+    def setup_ui(self):
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
         
-        self.login_card = ctk.CTkFrame(self.main_container, fg_color="#0f172a", corner_radius=15, width=420, height=330)
-        self.login_card.place(relx=0.5, rely=0.5, anchor="center")
-        self.login_card.pack_propagate(False)
-        
-        ctk.CTkLabel(self.login_card, text="ENTERPRISE NEXUS", font=("Segoe UI", 24, "bold"), text_color="#3b82f6").pack(pady=(35, 15))
-        
-        self.user_entry = ctk.CTkEntry(self.login_card, width=320, height=45, placeholder_text="Enter Username...")
-        self.user_entry.pack(pady=10)
-        if self.username: self.user_entry.insert(0, self.username)
-
-        self.ip_entry = ctk.CTkEntry(self.login_card, width=320, height=45, placeholder_text="Server IP (Default: 127.0.0.1)")
-        self.ip_entry.pack(pady=(0, 10))
-        if self.server_ip and self.server_ip != "127.0.0.1": 
-            self.ip_entry.insert(0, self.server_ip)
-        
-        self.connect_btn = ctk.CTkButton(self.login_card, text="Connect to Node", font=("Segoe UI", 14, "bold"), fg_color="#3b82f6", height=45, width=320, command=self.handle_login)
-        self.connect_btn.pack(pady=(15, 0))
-
-    def handle_login(self):
-        usr = self.user_entry.get().strip()
-        target_ip = self.ip_entry.get().strip() or "127.0.0.1"
-        
-        if not usr: return
-        self.connect_btn.configure(text="Connecting...", state="disabled")
-        self.api_base = f"http://{target_ip}:8050"
-        
-        def _auth_thread():
-            try:
-                requests.post(f"{self.api_base}/register/{usr}", timeout=4)
-                self.username = usr
-                self.server_ip = target_ip
-                self.save_settings()
-                self.after(0, self.transition_to_dashboard)
-            except Exception:
-                self.after(0, lambda: messagebox.showwarning("Connection Failed", "Cannot reach the Core Brain at that IP. Ensure the host server is running and your firewall allows port 8050."))
-                self.after(0, lambda: self.connect_btn.configure(text="Connect to Node", state="normal"))
-
-        threading.Thread(target=_auth_thread, daemon=True).start()
-
-    def transition_to_dashboard(self):
-        for widget in self.main_container.winfo_children():
-            widget.destroy()
-        self.start_network_poller()
-        self.show_dashboard_view()
-
-    # ==========================================
-    # VIEW SYSTEM: MAIN DASHBOARD
-    # ==========================================
-    def show_dashboard_view(self):
-        self.main_container.grid_columnconfigure(1, weight=1)
-        self.main_container.grid_rowconfigure(0, weight=1)
-        
-        s = ctk.CTkFrame(self.main_container, width=280, corner_radius=0)
+        # Sidebar
+        s = ctk.CTkFrame(self, width=280, fg_color="#020617", corner_radius=0)
         s.grid(row=0, column=0, sticky="nsew")
+        
         ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 22, "bold")).pack(pady=(30, 20))
         
-        ctk.CTkLabel(s, text="AI Engine Vector:", font=("Segoe UI", 12)).pack(anchor="w", padx=20)
-        self.model_menu = ctk.CTkOptionMenu(s, values=["google/gemini-1.5-flash:free", "meta-llama/llama-3.3-70b-instruct:free", "anthropic/claude-3-haiku"], command=self.save_settings)
-        self.model_menu.set(self.ai_model); self.model_menu.pack(fill="x", padx=20, pady=(0, 15))
-
-        ctk.CTkLabel(s, text="Operational Persona:", font=("Segoe UI", 12)).pack(anchor="w", padx=20)
-        self.persona_menu = ctk.CTkOptionMenu(s, values=["Policy Strict", "Creative Brainstorm", "Code Reviewer"], command=self.save_settings)
-        self.persona_menu.set(self.persona); self.persona_menu.pack(fill="x", padx=20, pady=(0, 20))
+        ctk.CTkButton(s, text="📂 Ingest Documents", font=("Segoe UI", 13), fg_color="#0ea5e9", command=self.add_docs).pack(fill="x", padx=20, pady=10)
+        ctk.CTkButton(s, text="📊 View Analytics", font=("Segoe UI", 13), fg_color="#8b5cf6", hover_color="#7c3aed", command=lambda: AnalyticsWindow(self)).pack(fill="x", padx=20, pady=10)
+        ctk.CTkButton(s, text="⚙️ API & Security", font=("Segoe UI", 13), fg_color="#334155", command=self.open_settings).pack(fill="x", padx=20, pady=10)
         
-        ctk.CTkButton(s, text="📂 Ingest Policy Data", font=("Segoe UI", 13), fg_color="#0ea5e9", command=self.add_docs).pack(fill="x", padx=20, pady=10)
-        ctk.CTkButton(s, text="⚙️ Access Credentials", font=("Segoe UI", 13), fg_color="#475569", command=self.open_settings).pack(fill="x", padx=20, pady=5)
-        
-        chat_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
-        chat_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
-        chat_frame.grid_columnconfigure(0, weight=1); chat_frame.grid_rowconfigure(0, weight=1)
-        
-        self.chat = ctk.CTkTextbox(chat_frame, font=("Segoe UI", 15), spacing1=10, spacing3=10, corner_radius=10)
-        self.chat.grid(row=0, column=0, sticky="nsew", pady=(0, 20))
-        self.chat.insert("1.0", f"SYSTEM: Identity Verified. Welcome back, {self.username}.\nCONNECTED TO: {self.server_ip}\nCOMMANDS: /announce [msg] or /msg [user] [msg]\n\n")
+        # Main Dashboard Chat
+        self.chat = ctk.CTkTextbox(self, font=("Segoe UI", 15), fg_color="#0f172a", spacing1=8, spacing3=8)
+        self.chat.grid(row=0, column=1, sticky="nsew", padx=20, pady=(20, 10))
+        self.chat.insert("1.0", "SYSTEM: Enterprise Monolith Online. Awaiting inquiries...\n\n")
         self.chat.configure(state="disabled")
         
-        self.entry = ctk.CTkEntry(chat_frame, height=55, placeholder_text="Query the local knowledge core or interface with network...", font=("Segoe UI", 15))
-        self.entry.grid(row=1, column=0, sticky="ew")
-        self.entry.bind("<Return>", lambda e: self.process_input())
+        # Input Area
+        input_frame = ctk.CTkFrame(self, fg_color="transparent")
+        input_frame.grid(row=1, column=1, sticky="ew", padx=20, pady=(0, 20))
+        input_frame.grid_columnconfigure(0, weight=1)
+        
+        self.entry = ctk.CTkEntry(input_frame, height=50, placeholder_text="Ask a compliance or policy question...", font=("Segoe UI", 14))
+        self.entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.entry.bind("<Return>", lambda e: self.send_main())
+        
+        # Deep Research Toggle
+        self.research_var = ctk.BooleanVar(value=False)
+        self.research_switch = ctk.CTkSwitch(input_frame, text="Deep Research Mode", variable=self.research_var, font=("Segoe UI", 12, "bold"), progress_color="#f59e0b")
+        self.research_switch.grid(row=0, column=1, padx=(0, 10))
+        
+        ctk.CTkButton(input_frame, text="Submit", width=100, height=50, fg_color="#3b82f6", font=("Segoe UI", 14, "bold"), command=self.send_main).grid(row=0, column=2)
 
-    def start_network_poller(self):
-        threading.Thread(target=self.poll_messages, daemon=True).start()
-
-    def poll_messages(self):
-        while True:
-            time.sleep(2)
-            try:
-                res = requests.get(f"{self.api_base}/poll_messages/{self.username}/{self.last_msg_id}", timeout=2)
-                if res.status_code == 200:
-                    for m in res.json().get("messages", []):
-                        self.last_msg_id = max(self.last_msg_id, m['id'])
-                        if m['sender'] != self.username:
-                            title = f"📢 Broadcast from {m['sender']}" if m['target'] == 'all' else f"✉️ Private from {m['sender']}"
-                            color = "#f59e0b" if m['target'] == 'all' else "#10b981"
-                            self.after(0, lambda t=title, c=color, msg=m['msg']: NotificationToast(self, t, msg, c))
-            except: pass
+    def log_audit(self, query, status, sources):
+        entry = {"timestamp": datetime.now().isoformat(), "query": query, "status": status, "sources": sources}
+        try:
+            log_data = []
+            if os.path.exists(AUDIT_FILE):
+                with open(AUDIT_FILE, "r") as f: log_data = json.load(f)
+            log_data.append(entry)
+            with open(AUDIT_FILE, "w") as f: json.dump(log_data, f, indent=4)
+        except: pass
 
     def safe_insert(self, target, text):
         def _update():
@@ -321,80 +172,110 @@ class SourceAgentClient(ctk.CTk):
             target.configure(state="disabled")
         self.after(0, _update)
 
-    def process_input(self):
+    def send_main(self):
         q = self.entry.get().strip()
         if not q: return
         self.entry.delete(0, "end")
+        threading.Thread(target=self.engine_generate, args=(q,), daemon=True).start()
+
+    def engine_generate(self, q):
+        self.safe_insert(self.chat, f"\nUSER: {q}\n")
         
-        if q.startswith("/announce "):
-            msg = q[10:]
-            self.safe_insert(self.chat, f"\n[YOU BROADCAST]: {msg}\n")
-            threading.Thread(target=lambda: requests.post(f"{self.api_base}/send_message/", json={"sender": self.username, "target": "all", "message": msg})).start()
-            return
-            
-        if q.startswith("/msg "):
-            parts = q.split(" ", 2)
-            if len(parts) > 2:
-                self.safe_insert(self.chat, f"\n[YOU to {parts[1]}]: {parts[2]}\n")
-                threading.Thread(target=lambda: requests.post(f"{self.api_base}/send_message/", json={"sender": self.username, "target": parts[1], "message": parts[2]})).start()
-            return
-
-        threading.Thread(target=self.query_backend, args=(q,), daemon=True).start()
-
-    def query_backend(self, q):
-        self.safe_insert(self.chat, f"\nUSER: {q}\nAGENT: Auditing records...\n")
         if not self.api_key:
             self.safe_insert(self.chat, "CRITICAL: OpenRouter API key missing. Configure in settings.\n---\n")
             return
+            
+        is_deep_research = self.research_var.get()
+        if is_deep_research:
+            self.safe_insert(self.chat, "AGENT: Deep Research Initiated. Gathering expanded context...\n")
+        else:
+            self.safe_insert(self.chat, "AGENT: Thinking...\n")
+        
         try:
-            res = requests.post(f"{self.api_base}/agentic_query/", json={"query": q, "api_key": self.api_key, "model": self.model_menu.get(), "persona": self.persona_menu.get()})
-            if res.status_code == 200:
-                data = res.json()
-                sources = ", ".join(data.get("sources", [])) if data.get("sources") else "None"
-                self.safe_insert(self.chat, f"\n{data.get('answer')}\n\n[Sources: {sources}]\n---\n")
-            else: self.safe_insert(self.chat, f"Server Error: {res.json().get('detail')}\n---\n")
-        except requests.exceptions.ConnectionError:
-            self.safe_insert(self.chat, "CRITICAL: Nexus Backend is unreachable.\n---\n")
+            llm = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model=self.ai_model, temperature=0.1)
+            
+            context = ""
+            sources_list = []
+            
+            if self.db:
+                # Dynamically adjust retrieval depth based on toggle
+                k_depth = 12 if is_deep_research else 5
+                docs = self.db.as_retriever(search_kwargs={"k": k_depth}).invoke(q)
+                context = "\n\n".join([f"Source: {d.metadata.get('source', 'Unknown')} | Page: {d.metadata.get('page', 'N/A')}\n{d.page_content}" for d in docs])
+                sources_list = list(set([d.metadata.get('source', 'Unknown Document') for d in docs]))
+                
+            sys_prompt = RESEARCH_PROMPT if is_deep_research else STANDARD_PROMPT
+            
+            final_resp = llm.invoke([SystemMessage(content=sys_prompt), HumanMessage(content=f"Context:\n{context}\n\nInquiry: {q}")]).content
+            
+            citations = ", ".join(sources_list) if sources_list else "None"
+            final_output = f"\n{final_resp}\n\n[Sources Referenced: {citations}]\n---\n"
+            
+            self.safe_insert(self.chat, final_output)
+            self.log_audit(q, "Success", sources_list)
+            
+        except Exception as e: 
+            self.safe_insert(self.chat, f"\nSystem Error: {e}\n\n---\n")
+            self.log_audit(q, f"Error: {str(e)}", [])
+
+    # --- ADVANCED INGESTION ---
+    def load_db(self):
+        index = os.path.join(SOURCE_DIR, "faiss_index")
+        if os.path.exists(index):
+            try: self.db = FAISS.load_local(index, self.embeddings, allow_dangerous_deserialization=True)
+            except: self.db = None
 
     def add_docs(self):
         files = filedialog.askopenfilenames(filetypes=[("PDF Documents", "*.pdf")])
         if files:
-            threading.Thread(target=lambda: [requests.post(f"{self.api_base}/ingest/", files={"file": (os.path.basename(f), open(f, "rb"), "application/pdf")}) for f in files], daemon=True).start()
-            messagebox.showinfo("Processing", "Transmitting to Nexus indexer...")
+            for f in files: shutil.copy(f, SOURCE_DIR)
+            threading.Thread(target=self.rebuild_db, daemon=True).start()
+            messagebox.showinfo("Processing", "Documents added. Indexing in background...")
+
+    def rebuild_db(self):
+        docs = []
+        for f in os.listdir(SOURCE_DIR):
+            if f.endswith(".pdf"): 
+                loader = PyMuPDFLoader(os.path.join(SOURCE_DIR, f))
+                docs.extend(loader.load())
+        
+        if docs:
+            splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=250)
+            split_docs = splitter.split_documents(docs)
+            for d in split_docs:
+                d.metadata['source'] = os.path.basename(d.metadata.get('source', 'Unknown'))
+                
+            self.db = FAISS.from_documents(split_docs, self.embeddings)
+            self.db.save_local(os.path.join(SOURCE_DIR, "faiss_index"))
+
+    # --- SETTINGS ---
+    def open_settings(self):
+        win = ctk.CTkToplevel(self)
+        win.title("Security & Credentials")
+        win.geometry("450x200")
+        win.attributes("-topmost", True)
+        
+        ctk.CTkLabel(win, text="OpenRouter API Key:", font=("Segoe UI", 12, "bold")).pack(pady=(20, 5))
+        api_entry = ctk.CTkEntry(win, width=370, show="*")
+        api_entry.insert(0, self.api_key)
+        api_entry.pack()
+
+        def apply_changes():
+            self.api_key = api_entry.get().strip()
+            with open(SAVE_FILE, "w") as f: json.dump({"api_key": self.api_key}, f)
+            win.destroy()
+            
+        ctk.CTkButton(win, text="Save Configuration", fg_color="#3b82f6", command=apply_changes).pack(pady=30)
 
     def load_settings(self):
         if os.path.exists(SAVE_FILE):
             try:
                 with open(SAVE_FILE, "r") as f:
                     d = json.load(f)
-                    self.api_key, self.username = d.get("api_key", ""), d.get("username", "")
-                    self.server_ip = d.get("server_ip", "127.0.0.1")
-                    self.api_base = f"http://{self.server_ip}:8050"
-                    self.ai_model, self.persona = d.get("ai_model", "google/gemini-1.5-flash:free"), d.get("persona", "Policy Strict")
+                    self.api_key = d.get("api_key", "")
             except: pass
 
-    def save_settings(self, _=None):
-        with open(SAVE_FILE, "w") as f:
-            json.dump({
-                "api_key": self.api_key, 
-                "username": self.username, 
-                "server_ip": getattr(self, "server_ip", "127.0.0.1"),
-                "ai_model": getattr(self, "model_menu", None) and self.model_menu.get() or self.ai_model, 
-                "persona": getattr(self, "persona_menu", None) and self.persona_menu.get() or self.persona
-            }, f)
-
-    def open_settings(self):
-        win = ctk.CTkToplevel(self)
-        win.title("Security & API"); win.geometry("400x200"); win.attributes("-topmost", True)
-        ctk.CTkLabel(win, text="OpenRouter API Key:").pack(pady=(20, 5))
-        api_entry = ctk.CTkEntry(win, width=350, show="*"); api_entry.insert(0, self.api_key); api_entry.pack()
-        def apply_changes(): self.api_key = api_entry.get().strip(); self.save_settings(); win.destroy()
-        ctk.CTkButton(win, text="Apply Configuration", command=apply_changes).pack(pady=20)
-
-    def destroy(self):
-        if self.server_process: self.server_process.terminate()
-        super().destroy()
-
 if __name__ == "__main__":
-    app = SourceAgentClient()
+    from datetime import datetime
+    app = SourceAgentMaster()
     app.mainloop()
