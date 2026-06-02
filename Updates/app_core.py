@@ -174,7 +174,7 @@ class NotificationToast(ctk.CTkFrame):
 class SourceAgentClient(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Source Agent | Nexus V34")
+        self.title("Source Agent | Nexus V34.1")
         self.geometry("1250x800")
         ctk.set_appearance_mode("Dark")
         
@@ -183,24 +183,23 @@ class SourceAgentClient(ctk.CTk):
         self.ai_model = "google/gemini-1.5-flash:free"
         self.persona = "Policy Strict"
         self.username = ""
-        self.api_base = "http://127.0.0.1:8050"
+        self.server_ip = "127.0.0.1"
+        self.api_base = f"http://{self.server_ip}:8050"
         self.last_msg_id = time.time()
         self.server_process = None
         
         self.load_settings()
         self.autonomous_server_boot()
         
-        # Main container framework for layout hot-swaps
         self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.pack(fill="both", expand=True)
         
-        # Display the entry portal first
         self.show_login_view()
 
     def autonomous_server_boot(self):
-        """Spins up backend engine in its own window frame securely."""
+        """Attempts to spin up a local node in the background, just in case they want a local server."""
         try:
-            requests.get(f"{self.api_base}/ping", timeout=1)
+            requests.get("http://127.0.0.1:8050/ping", timeout=1)
         except:
             if os.name == 'nt':
                 self.server_process = subprocess.Popen(
@@ -214,12 +213,10 @@ class SourceAgentClient(ctk.CTk):
     # VIEW SYSTEM: LOGIN SCREEN
     # ==========================================
     def show_login_view(self):
-        # Full window gradient backplate
         self.login_bg = GradientFrame(self.main_container, "#020617", "#1e3a8a", highlightthickness=0)
         self.login_bg.place(relx=0, rely=0, relwidth=1, relheight=1)
         
-        # Centered Authentication Card
-        self.login_card = ctk.CTkFrame(self.main_container, fg_color="#0f172a", corner_radius=15, width=420, height=280)
+        self.login_card = ctk.CTkFrame(self.main_container, fg_color="#0f172a", corner_radius=15, width=420, height=330)
         self.login_card.place(relx=0.5, rely=0.5, anchor="center")
         self.login_card.pack_propagate(False)
         
@@ -228,34 +225,39 @@ class SourceAgentClient(ctk.CTk):
         self.user_entry = ctk.CTkEntry(self.login_card, width=320, height=45, placeholder_text="Enter Username...")
         self.user_entry.pack(pady=10)
         if self.username: self.user_entry.insert(0, self.username)
+
+        self.ip_entry = ctk.CTkEntry(self.login_card, width=320, height=45, placeholder_text="Server IP (Default: 127.0.0.1)")
+        self.ip_entry.pack(pady=(0, 10))
+        if self.server_ip and self.server_ip != "127.0.0.1": 
+            self.ip_entry.insert(0, self.server_ip)
         
         self.connect_btn = ctk.CTkButton(self.login_card, text="Connect to Node", font=("Segoe UI", 14, "bold"), fg_color="#3b82f6", height=45, width=320, command=self.handle_login)
         self.connect_btn.pack(pady=(15, 0))
 
     def handle_login(self):
         usr = self.user_entry.get().strip()
+        target_ip = self.ip_entry.get().strip() or "127.0.0.1"
+        
         if not usr: return
         self.connect_btn.configure(text="Connecting...", state="disabled")
+        self.api_base = f"http://{target_ip}:8050"
         
         def _auth_thread():
             try:
                 requests.post(f"{self.api_base}/register/{usr}", timeout=4)
                 self.username = usr
+                self.server_ip = target_ip
                 self.save_settings()
-                # Server is up and username registered -> Transition to Dashboard View safely
                 self.after(0, self.transition_to_dashboard)
             except Exception:
-                self.after(0, lambda: messagebox.showwarning("System Booting", "The Core Brain is completing its boot loop. Please wait 3 seconds and retry connection."))
+                self.after(0, lambda: messagebox.showwarning("Connection Failed", "Cannot reach the Core Brain at that IP. Ensure the host server is running and your firewall allows port 8050."))
                 self.after(0, lambda: self.connect_btn.configure(text="Connect to Node", state="normal"))
 
         threading.Thread(target=_auth_thread, daemon=True).start()
 
     def transition_to_dashboard(self):
-        # Wipe all widgets from the container window
         for widget in self.main_container.winfo_children():
             widget.destroy()
-            
-        # Initialize communication and build dashboard structure
         self.start_network_poller()
         self.show_dashboard_view()
 
@@ -266,7 +268,6 @@ class SourceAgentClient(ctk.CTk):
         self.main_container.grid_columnconfigure(1, weight=1)
         self.main_container.grid_rowconfigure(0, weight=1)
         
-        # Navigation Panel Left
         s = ctk.CTkFrame(self.main_container, width=280, corner_radius=0)
         s.grid(row=0, column=0, sticky="nsew")
         ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 22, "bold")).pack(pady=(30, 20))
@@ -282,14 +283,13 @@ class SourceAgentClient(ctk.CTk):
         ctk.CTkButton(s, text="📂 Ingest Policy Data", font=("Segoe UI", 13), fg_color="#0ea5e9", command=self.add_docs).pack(fill="x", padx=20, pady=10)
         ctk.CTkButton(s, text="⚙️ Access Credentials", font=("Segoe UI", 13), fg_color="#475569", command=self.open_settings).pack(fill="x", padx=20, pady=5)
         
-        # Main Dialogue Hub Right
         chat_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         chat_frame.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
         chat_frame.grid_columnconfigure(0, weight=1); chat_frame.grid_rowconfigure(0, weight=1)
         
         self.chat = ctk.CTkTextbox(chat_frame, font=("Segoe UI", 15), spacing1=10, spacing3=10, corner_radius=10)
         self.chat.grid(row=0, column=0, sticky="nsew", pady=(0, 20))
-        self.chat.insert("1.0", f"SYSTEM: Identity Verified. Welcome back, {self.username}.\nCOMMANDS: /announce [msg] or /msg [user] [msg]\n\n")
+        self.chat.insert("1.0", f"SYSTEM: Identity Verified. Welcome back, {self.username}.\nCONNECTED TO: {self.server_ip}\nCOMMANDS: /announce [msg] or /msg [user] [msg]\n\n")
         self.chat.configure(state="disabled")
         
         self.entry = ctk.CTkEntry(chat_frame, height=55, placeholder_text="Query the local knowledge core or interface with network...", font=("Segoe UI", 15))
@@ -368,6 +368,8 @@ class SourceAgentClient(ctk.CTk):
                 with open(SAVE_FILE, "r") as f:
                     d = json.load(f)
                     self.api_key, self.username = d.get("api_key", ""), d.get("username", "")
+                    self.server_ip = d.get("server_ip", "127.0.0.1")
+                    self.api_base = f"http://{self.server_ip}:8050"
                     self.ai_model, self.persona = d.get("ai_model", "google/gemini-1.5-flash:free"), d.get("persona", "Policy Strict")
             except: pass
 
@@ -376,6 +378,7 @@ class SourceAgentClient(ctk.CTk):
             json.dump({
                 "api_key": self.api_key, 
                 "username": self.username, 
+                "server_ip": getattr(self, "server_ip", "127.0.0.1"),
                 "ai_model": getattr(self, "model_menu", None) and self.model_menu.get() or self.ai_model, 
                 "persona": getattr(self, "persona_menu", None) and self.persona_menu.get() or self.persona
             }, f)
