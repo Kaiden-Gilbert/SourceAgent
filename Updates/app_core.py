@@ -9,20 +9,62 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
+from datetime import datetime
 
-# --- CONFIG ---
+# --- CONFIGURATION & PATHS ---
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
 ENV_FILE = os.path.join(BASE_DIR, ".env")
+AUDIT_FILE = os.path.join(BASE_DIR, "audit_log.json")
 os.makedirs(SOURCE_DIR, exist_ok=True)
 
+# --- STRICT COMPLIANCE DIRECTIVE ---
+SYSTEM_PROMPT = """You are "Policy Advisor 2026." 
+1. Answer strictly using provided policy docs.
+2. Quote verbatim where applicable. 
+3. Separate quotes from your plain English explanation.
+4. NO hallucinations. If the answer is missing, state: "I cannot find a policy regarding this."
+5. Tone: Clinical, professional, precise."""
+
+# ==========================================
+# WINDOW CLASS: DEDICATED CHAT
+# ==========================================
+class DedicatedChatWindow(ctk.CTkToplevel):
+    def __init__(self, master, app_core):
+        super().__init__(master)
+        self.parent = app_core
+        self.title("Session Terminal")
+        self.geometry("750x550")
+        
+        self.chat = ctk.CTkTextbox(self, font=("Segoe UI", 14), fg_color="#020617", spacing1=5, spacing3=5)
+        self.chat.pack(fill="both", expand=True, padx=15, pady=15)
+        self.chat.insert("1.0", "SYSTEM: Dedicated isolated session established.\n\n")
+        self.chat.configure(state="disabled")
+        
+        self.entry = ctk.CTkEntry(self, height=45, placeholder_text="Ask a compliance question...")
+        self.entry.pack(fill="x", padx=15, pady=(0, 15))
+        self.entry.bind("<Return>", lambda e: self.send())
+    
+    def send(self):
+        q = self.entry.get().strip()
+        if not q: return
+        self.entry.delete(0, "end")
+        threading.Thread(target=self.parent.ai_generate, args=(q, self.chat), daemon=True).start()
+
+# ==========================================
+# MAIN APPLICATION ENGINE
+# ==========================================
 class PolicyAdvisorMaster(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Policy Advisor 2026 | Enterprise")
+        self.title("Policy Advisor 2026 | Enterprise V24")
         self.geometry("1200x800")
+        ctk.set_appearance_mode("Dark")
         
+        # Core Engine Settings
         self.ai_model = "google/gemini-1.5-flash:free"
+        self.app_password = ""
+        self.load_settings()
         
         self.setup_ui()
         load_dotenv(ENV_FILE)
@@ -35,51 +77,86 @@ class PolicyAdvisorMaster(ctk.CTk):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         
-        s = ctk.CTkFrame(self, width=200)
+        # Sidebar Navigation
+        s = ctk.CTkFrame(self, width=260, fg_color="#020617")
         s.grid(row=0, column=0, sticky="nsew")
         
-        # UI Buttons
-        ctk.CTkButton(s, text="New Session", command=self.clear_chat).pack(pady=10, padx=10)
-        ctk.CTkButton(s, text="📂 Upload Docs", command=self.add_docs).pack(fill="x", padx=10, pady=5)
+        ctk.CTkLabel(s, text="🏛️ Policy Advisor", font=("Segoe UI", 20, "bold")).pack(pady=(25, 20))
+        ctk.CTkButton(s, text="⧉ Dedicated Chat", font=("Segoe UI", 13, "bold"), fg_color="#10b981", hover_color="#059669", command=lambda: DedicatedChatWindow(self, self)).pack(fill="x", padx=15, pady=8)
+        ctk.CTkButton(s, text="📂 Upload Policies", font=("Segoe UI", 13), fg_color="#0ea5e9", command=self.add_docs).pack(fill="x", padx=15, pady=8)
+        ctk.CTkButton(s, text="🧹 Clear Dashboard", font=("Segoe UI", 13), fg_color="#334155", command=self.clear_chat).pack(fill="x", padx=15, pady=8)
         
-        self.chat = ctk.CTkTextbox(self, fg_color="#0f172a", font=("Segoe UI", 14))
-        self.chat.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
-        self.chat.insert("1.0", "SYSTEM: Enterprise Module Online.\n\n")
+        # Main Dashboard Chat
+        self.chat = ctk.CTkTextbox(self, font=("Segoe UI", 15), fg_color="#0f172a", spacing1=8, spacing3=8)
+        self.chat.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
+        self.chat.insert("1.0", "SYSTEM: Enterprise Module Online. Awaiting inquiry...\n\n")
         self.chat.configure(state="disabled")
         
-        self.entry = ctk.CTkEntry(self, height=45, placeholder_text="Ask a compliance question...")
-        self.entry.grid(row=1, column=1, sticky="ew", padx=10, pady=10)
-        self.entry.bind("<Return>", lambda e: self.send())
+        self.entry = ctk.CTkEntry(self, height=50, placeholder_text="Ask a compliance or policy question...", font=("Segoe UI", 14))
+        self.entry.grid(row=1, column=1, sticky="ew", padx=20, pady=(0, 20))
+        self.entry.bind("<Return>", lambda e: self.send_main())
 
     def clear_chat(self):
         self.chat.configure(state="normal")
         self.chat.delete("1.0", "end")
-        self.chat.insert("1.0", "SYSTEM: Memory wiped. Ready for new inquiry.\n\n")
+        self.chat.insert("1.0", "SYSTEM: Dashboard memory wiped. Ready for new inquiry.\n\n")
         self.chat.configure(state="disabled")
 
-    def send(self):
-        q = self.entry.get()
+    def send_main(self):
+        q = self.entry.get().strip()
         if not q: return
         self.entry.delete(0, "end")
         threading.Thread(target=self.ai_generate, args=(q, self.chat), daemon=True).start()
 
+    def log_audit(self, query, sources):
+        """Silently records usage data for administrative review."""
+        entry = {"timestamp": datetime.now().isoformat(), "query": query, "sources_referenced": sources}
+        try:
+            log_data = []
+            if os.path.exists(AUDIT_FILE):
+                with open(AUDIT_FILE, "r") as f: log_data = json.load(f)
+            log_data.append(entry)
+            with open(AUDIT_FILE, "w") as f: json.dump(log_data, f, indent=4)
+        except: pass
+
     def ai_generate(self, q, target):
         target.configure(state="normal")
-        target.insert("end", f"\nUSER: {q}\n\nADVISOR: ")
+        target.insert("end", f"\nUSER: {q}\n\nADVISOR: Thinking...")
+        target.see("end")
+        
         try:
             llm = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model=self.ai_model)
             context = ""
+            sources_list = []
+            
             if self.db:
-                docs = self.db.as_retriever(search_kwargs={"k": 4}).invoke(q)
-                context = "\n".join([d.page_content for d in docs])
+                # Expanded retrieval depth for enterprise accuracy
+                docs = self.db.as_retriever(search_kwargs={"k": 6}).invoke(q)
+                context = "\n\n".join([d.page_content for d in docs])
+                # Extract clean filenames from metadata
+                sources_list = list(set([os.path.basename(d.metadata.get('source', 'Unknown Document')) for d in docs]))
                 
-            prompt = "You are Policy Advisor. Provide precise, documented answers from the context. Quote verbatim. If missing, state it is not in the policy."
-            resp = llm.invoke([SystemMessage(content=prompt), HumanMessage(content=f"Context:\n{context}\n\nInquiry: {q}")]).content
-            target.insert("end", f"{resp}\n\n---\n")
+            resp = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=f"Context:\n{context}\n\nInquiry: {q}")]).content
+            
+            # Format the output with professional source citations
+            target.delete("end-12c", "end") # Remove "Thinking..."
+            target.insert("end", f"{resp}\n\n")
+            
+            if sources_list:
+                citations = ", ".join(sources_list)
+                target.insert("end", f"[Sources Referenced: {citations}]\n")
+                
+            target.insert("end", "---\n")
+            self.log_audit(q, sources_list)
+            
         except Exception as e: 
-            target.insert("end", f"Error: {e}\n\n---\n")
+            target.delete("end-12c", "end")
+            target.insert("end", f"System Error: {e}\n\n---\n")
+            
         target.configure(state="disabled")
+        target.see("end")
 
+    # --- DATABASE & STORAGE MANAGEMENT ---
     def load_db(self):
         index = os.path.join(SOURCE_DIR, "faiss_index")
         if os.path.exists(index):
@@ -89,18 +166,30 @@ class PolicyAdvisorMaster(ctk.CTk):
                 self.db = None
 
     def add_docs(self):
-        files = filedialog.askopenfilenames(filetypes=[("PDFs", "*.pdf")])
+        files = filedialog.askopenfilenames(filetypes=[("PDF Documents", "*.pdf")])
         if files:
             for f in files: shutil.copy(f, SOURCE_DIR)
-            self.rebuild_db()
+            threading.Thread(target=self.rebuild_db, daemon=True).start()
+            messagebox.showinfo("Processing", "Documents added. Indexing in background...")
 
     def rebuild_db(self):
         docs = []
         for f in os.listdir(SOURCE_DIR):
-            if f.endswith(".pdf"): docs.extend(PyMuPDFLoader(os.path.join(SOURCE_DIR, f)).load())
+            if f.endswith(".pdf"): 
+                docs.extend(PyMuPDFLoader(os.path.join(SOURCE_DIR, f)).load())
         if docs:
-            self.db = FAISS.from_documents(RecursiveCharacterTextSplitter(chunk_size=1000).split_documents(docs), self.embeddings)
+            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+            self.db = FAISS.from_documents(splitter.split_documents(docs), self.embeddings)
             self.db.save_local(os.path.join(SOURCE_DIR, "faiss_index"))
+
+    def load_settings(self):
+        config_path = os.path.join(BASE_DIR, "config.json")
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, "r") as f:
+                    d = json.load(f)
+                    self.app_password = d.get("app_password", "")
+            except: pass
 
 if __name__ == "__main__":
     app = PolicyAdvisorMaster()
