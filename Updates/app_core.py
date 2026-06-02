@@ -116,7 +116,7 @@ async def agentic_query(req: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8050, log_level="critical")
+    uvicorn.run(app, host="0.0.0.0", port=8050, log_level="info")
 """)
 
 SERVER_FILE = os.path.join(SERVER_DIR, "backend_engine.py")
@@ -205,7 +205,7 @@ class LoginGateway(ctk.CTkToplevel):
             self.master_app.start_network_poller()
             self.destroy()
         except Exception:
-            messagebox.showerror("Connection Error", "Cannot reach the Nexus Server. Ensure the backend is running.")
+            messagebox.showerror("Connection Error", "Cannot reach the Nexus Server. Is the backend terminal running without errors?")
             self.btn.configure(text="Connect", state="normal")
 
 class SourceAgentClient(ctk.CTk):
@@ -232,14 +232,19 @@ class SourceAgentClient(ctk.CTk):
         self.deiconify()
 
     def autonomous_server_boot(self):
-        """Silently spins up the local server without user intervention."""
+        """DIAGNOSTIC UPDATE: Spins up the server in a VISIBLE command prompt window."""
         try:
-            # Check if server is already running to avoid port conflicts
             requests.get(f"{self.api_base}/ping", timeout=1)
         except:
-            # If unreachable, boot it silently as a daemon
-            self.server_process = subprocess.Popen([sys.executable, SERVER_FILE], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(2) # Give it a second to bind to the port
+            if os.name == 'nt':
+                # Windows: Force open a new visible terminal window so we can see the crash trace
+                self.server_process = subprocess.Popen(
+                    [sys.executable, SERVER_FILE], 
+                    creationflags=subprocess.CREATE_NEW_CONSOLE
+                )
+            else:
+                self.server_process = subprocess.Popen([sys.executable, SERVER_FILE])
+            time.sleep(3) # Give Uvicorn 3 seconds to spin up
 
     def start_network_poller(self):
         threading.Thread(target=self.poll_messages, daemon=True).start()
