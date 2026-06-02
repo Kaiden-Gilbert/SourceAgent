@@ -1,7 +1,8 @@
-import os, threading, shutil, json, urllib.request
+import os, threading, shutil, json, time, urllib.request
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
+
 from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyMuPDFLoader
@@ -10,9 +11,8 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 from dotenv import load_dotenv
 from datetime import datetime
-import math
 
-# --- CONFIGURATION & PATHS ---
+# --- CONFIGURATION ---
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
 ENV_FILE = os.path.join(BASE_DIR, ".env")
@@ -20,38 +20,67 @@ AUDIT_FILE = os.path.join(BASE_DIR, "audit_log.json")
 SAVE_FILE = os.path.join(BASE_DIR, "config.json")
 os.makedirs(SOURCE_DIR, exist_ok=True)
 
-# --- STRICT COMPLIANCE DIRECTIVE ---
-SYSTEM_PROMPT = """You are "Policy Advisor 2026." 
-1. Answer strictly using provided policy docs.
-2. Quote verbatim where applicable. 
-3. Separate quotes from your plain English explanation.
-4. NO hallucinations. If the answer is missing, state: "I cannot find a policy regarding this."
-5. Tone: Clinical, professional, precise."""
+# --- STRICT VERIFICATION PROMPTS ---
+EVALUATOR_PROMPT = """You are a RAG Verification Agent.
+Evaluate if the provided context contains sufficient evidence to answer the user's query.
+Respond ONLY with "SUFFICIENT" or "INSUFFICIENT"."""
+
+GENERATOR_PROMPT = """You are "Source Agent 2026." 
+CORE PRINCIPLE: Source Truth Policy.
+1. Answer ONLY using information found in the provided context.
+2. NEVER invent, guess, or hallucinate.
+3. If information is missing, explicitly state: "I cannot find information regarding this topic within the provided sources."
+4. Every factual claim must include a citation.
+Format: [Explanation] -> [Citations]"""
 
 # ==========================================
-# WINDOW CLASS: DEDICATED CHAT
+# WINDOW CLASS: DEDICATED CHAT & EVIDENCE VIEWER
 # ==========================================
 class DedicatedChatWindow(ctk.CTkToplevel):
     def __init__(self, master, app_core):
         super().__init__(master)
         self.parent = app_core
-        self.title("Session Terminal")
-        self.geometry("750x550")
+        self.title("Agentic Session Terminal")
+        self.geometry("850x600")
+        self.current_evidence = ""
+        
+        # Layout
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
         
         self.chat = ctk.CTkTextbox(self, font=("Segoe UI", 14), fg_color="#020617", spacing1=5, spacing3=5)
-        self.chat.pack(fill="both", expand=True, padx=15, pady=15)
-        self.chat.insert("1.0", "SYSTEM: Dedicated isolated session established.\n\n")
+        self.chat.grid(row=0, column=0, sticky="nsew", padx=15, pady=15)
+        self.chat.insert("1.0", "SYSTEM: Agentic retrieval loop active. Strict grounding enforced.\n\n")
         self.chat.configure(state="disabled")
         
-        self.entry = ctk.CTkEntry(self, height=45, placeholder_text="Ask a compliance question...")
-        self.entry.pack(fill="x", padx=15, pady=(0, 15))
+        input_frame = ctk.CTkFrame(self, fg_color="transparent")
+        input_frame.grid(row=1, column=0, sticky="ew", padx=15, pady=(0, 15))
+        input_frame.grid_columnconfigure(0, weight=1)
+        
+        self.entry = ctk.CTkEntry(input_frame, height=45, placeholder_text="Ask a question...")
+        self.entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
         self.entry.bind("<Return>", lambda e: self.send())
+        
+        ctk.CTkButton(input_frame, text="View Evidence", width=120, height=45, fg_color="#475569", command=self.show_evidence).grid(row=0, column=1, padx=(0, 10))
+        ctk.CTkButton(input_frame, text="Submit", width=100, height=45, fg_color="#3b82f6", command=self.send).grid(row=0, column=2)
     
     def send(self):
         q = self.entry.get().strip()
         if not q: return
         self.entry.delete(0, "end")
-        threading.Thread(target=self.parent.ai_generate, args=(q, self.chat), daemon=True).start()
+        threading.Thread(target=self.parent.agentic_generate, args=(q, self.chat, self), daemon=True).start()
+
+    def show_evidence(self):
+        if not self.current_evidence:
+            messagebox.showinfo("Evidence Viewer", "No evidence currently loaded in memory.")
+            return
+        win = ctk.CTkToplevel(self)
+        win.title("Raw Evidence Viewer")
+        win.geometry("600x500")
+        box = ctk.CTkTextbox(win, font=("Consolas", 12), fg_color="#0f172a")
+        box.pack(fill="both", expand=True, padx=10, pady=10)
+        box.insert("1.0", self.current_evidence)
+        box.configure(state="disabled")
 
 # ==========================================
 # MAIN APPLICATION ENGINE
@@ -59,11 +88,10 @@ class DedicatedChatWindow(ctk.CTkToplevel):
 class PolicyAdvisorMaster(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Policy Advisor 2026 | Enterprise V25")
+        self.title("Source Agent | Apex Build V26")
         self.geometry("1200x800")
         ctk.set_appearance_mode("Dark")
         
-        # Core Engine Settings
         self.ai_model = "google/gemini-1.5-flash:free"
         self.app_password = ""
         self.load_settings()
@@ -75,85 +103,36 @@ class PolicyAdvisorMaster(ctk.CTk):
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         self.db = None
         self.load_db()
-        
-        # ACTIVE API VALIDATION IN BACKGROUND
-        threading.Thread(target=self.verify_api_key, daemon=True).start()
-
-    def verify_api_key(self):
-        """Actively ping OpenRouter authentication servers to ensure the key is live."""
-        self.after(0, lambda: self.status_lbl.configure(text="● Verifying Credentials...", text_color="#f59e0b"))
-        time.sleep(0.5) # Brief pause for UI fluidity
-        
-        if not self.api_key or len(self.api_key) < 10:
-            self.after(0, self.trigger_key_failure, "● API Key Missing!")
-            return
-
-        try:
-            req = urllib.request.Request("https://openrouter.ai/api/v1/auth/key", headers={"Authorization": f"Bearer {self.api_key}"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.getcode() == 200:
-                    self.after(0, lambda: self.status_lbl.configure(text="● Engine Online", text_color="#10b981"))
-                else:
-                    self.after(0, self.trigger_key_failure, "● API Key Rejected!")
-        except Exception:
-            self.after(0, self.trigger_key_failure, "● Invalid API Key!")
-
-    def trigger_key_failure(self, message):
-        """Handle UI response when API key is bad."""
-        self.status_lbl.configure(text=message, text_color="#ef4444")
-        self.chat.configure(state="normal")
-        self.chat.insert("end", f"CRITICAL: The system detected an invalid or missing API key.\nPlease open Settings to update your OpenRouter credentials.\n\n---\n")
-        self.chat.configure(state="disabled")
-
-    def update_env_file(self, new_key):
-        """Saves a new API key directly to the environment file and re-validates."""
-        with open(ENV_FILE, "w") as f:
-            f.write(f"OPENROUTER_API_KEY={new_key}\n")
-        self.api_key = new_key
-        os.environ["OPENROUTER_API_KEY"] = new_key
-        threading.Thread(target=self.verify_api_key, daemon=True).start()
 
     def setup_ui(self):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
         
-        # Sidebar Navigation
         s = ctk.CTkFrame(self, width=260, fg_color="#020617")
         s.grid(row=0, column=0, sticky="nsew")
         
-        ctk.CTkLabel(s, text="🏛️ Policy Advisor", font=("Segoe UI", 20, "bold")).pack(pady=(25, 20))
-        ctk.CTkButton(s, text="⧉ Dedicated Chat", font=("Segoe UI", 13, "bold"), fg_color="#10b981", hover_color="#059669", command=lambda: DedicatedChatWindow(self, self)).pack(fill="x", padx=15, pady=8)
-        ctk.CTkButton(s, text="📂 Upload Policies", font=("Segoe UI", 13), fg_color="#0ea5e9", command=self.add_docs).pack(fill="x", padx=15, pady=8)
-        ctk.CTkButton(s, text="⚙️ Settings", font=("Segoe UI", 13), fg_color="#334155", command=self.open_settings).pack(fill="x", padx=15, pady=8)
-        ctk.CTkButton(s, text="🧹 Clear Dashboard", font=("Segoe UI", 13), fg_color="#334155", command=self.clear_chat).pack(fill="x", padx=15, pady=8)
+        ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 20, "bold")).pack(pady=(25, 20))
+        ctk.CTkButton(s, text="⧉ Agentic Chat", font=("Segoe UI", 13, "bold"), fg_color="#10b981", hover_color="#059669", command=lambda: DedicatedChatWindow(self, self)).pack(fill="x", padx=15, pady=8)
+        ctk.CTkButton(s, text="📂 Ingest Sources", font=("Segoe UI", 13), fg_color="#0ea5e9", command=self.add_docs).pack(fill="x", padx=15, pady=8)
+        ctk.CTkButton(s, text="⚙️ Security & API", font=("Segoe UI", 13), fg_color="#334155", command=self.open_settings).pack(fill="x", padx=15, pady=8)
         
-        self.status_lbl = ctk.CTkLabel(s, text="● Initializing...", text_color="#94a3b8", font=("Segoe UI", 12, "bold"))
-        self.status_lbl.pack(side="bottom", pady=20)
-
-        # Main Dashboard Chat
         self.chat = ctk.CTkTextbox(self, font=("Segoe UI", 15), fg_color="#0f172a", spacing1=8, spacing3=8)
         self.chat.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
-        self.chat.insert("1.0", "SYSTEM: Enterprise Module booting sequence initiated...\n\n")
+        self.chat.insert("1.0", "SYSTEM: RAG Pipeline initialized. Awaiting queries...\n\n")
         self.chat.configure(state="disabled")
         
-        self.entry = ctk.CTkEntry(self, height=50, placeholder_text="Ask a compliance or policy question...", font=("Segoe UI", 14))
+        self.entry = ctk.CTkEntry(self, height=50, placeholder_text="Ask a grounded question...", font=("Segoe UI", 14))
         self.entry.grid(row=1, column=1, sticky="ew", padx=20, pady=(0, 20))
         self.entry.bind("<Return>", lambda e: self.send_main())
-
-    def clear_chat(self):
-        self.chat.configure(state="normal")
-        self.chat.delete("1.0", "end")
-        self.chat.insert("1.0", "SYSTEM: Dashboard memory wiped. Ready for new inquiry.\n\n")
-        self.chat.configure(state="disabled")
 
     def send_main(self):
         q = self.entry.get().strip()
         if not q: return
         self.entry.delete(0, "end")
-        threading.Thread(target=self.ai_generate, args=(q, self.chat), daemon=True).start()
+        threading.Thread(target=self.agentic_generate, args=(q, self.chat, None), daemon=True).start()
 
-    def log_audit(self, query, sources):
-        entry = {"timestamp": datetime.now().isoformat(), "query": query, "sources_referenced": sources}
+    def log_audit(self, query, status):
+        entry = {"timestamp": datetime.now().isoformat(), "query": query, "status": status}
         try:
             log_data = []
             if os.path.exists(AUDIT_FILE):
@@ -162,73 +141,52 @@ class PolicyAdvisorMaster(ctk.CTk):
             with open(AUDIT_FILE, "w") as f: json.dump(log_data, f, indent=4)
         except: pass
 
-    def ai_generate(self, q, target):
+    # --- THE AGENTIC RETRIEVAL LOOP ---
+    def agentic_generate(self, q, target, chat_window_instance=None):
         target.configure(state="normal")
-        target.insert("end", f"\nUSER: {q}\n\nADVISOR: Thinking...")
+        target.insert("end", f"\nUSER: {q}\n")
         target.see("end")
         
         try:
-            llm = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model=self.ai_model)
-            context = ""
-            sources_list = []
+            llm = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model=self.ai_model, temperature=0.0)
             
-            if self.db:
-                docs = self.db.as_retriever(search_kwargs={"k": 6}).invoke(q)
-                context = "\n\n".join([d.page_content for d in docs])
-                sources_list = list(set([os.path.basename(d.metadata.get('source', 'Unknown Document')) for d in docs]))
-                
-            resp = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=f"Context:\n{context}\n\nInquiry: {q}")]).content
+            # STEP 1: Initial Retrieval
+            target.insert("end", "AGENT: Searching sources...\n")
+            target.see("end"); self.update()
+            docs = self.db.as_retriever(search_kwargs={"k": 5}).invoke(q) if self.db else []
+            context = "\n\n".join([f"Source: {d.metadata.get('source', 'Unknown')} | Page: {d.metadata.get('page', 'N/A')}\n{d.page_content}" for d in docs])
             
-            target.delete("end-12c", "end") 
-            target.insert("end", f"{resp}\n\n")
+            # STEP 2: Evaluation Loop
+            eval_resp = llm.invoke([SystemMessage(content=EVALUATOR_PROMPT), HumanMessage(content=f"Context:\n{context}\n\nQuery: {q}")]).content
             
-            if sources_list:
-                citations = ", ".join(sources_list)
-                target.insert("end", f"[Sources Referenced: {citations}]\n")
-                
-            target.insert("end", "---\n")
-            self.log_audit(q, sources_list)
+            if "INSUFFICIENT" in eval_resp.upper() and self.db:
+                target.insert("end", "AGENT: Evidence insufficient. Triggering Deep Search...\n")
+                target.see("end"); self.update()
+                # Expand search scope
+                docs = self.db.as_retriever(search_kwargs={"k": 12}).invoke(q)
+                context = "\n\n".join([f"Source: {d.metadata.get('source', 'Unknown')} | Page: {d.metadata.get('page', 'N/A')}\n{d.page_content}" for d in docs])
+
+            if chat_window_instance:
+                chat_window_instance.current_evidence = context if context else "No evidence found."
+
+            # STEP 3: Verified Generation
+            target.insert("end", "AGENT: Synthesizing verified response...\n")
+            target.see("end"); self.update()
+            
+            final_resp = llm.invoke([SystemMessage(content=GENERATOR_PROMPT), HumanMessage(content=f"Context:\n{context}\n\nInquiry: {q}")]).content
+            
+            # Print Final output
+            target.insert("end", f"\n{final_resp}\n\n---\n")
+            self.log_audit(q, "Success")
             
         except Exception as e: 
-            target.delete("end-12c", "end")
-            target.insert("end", f"System Error: API Key or Connection issue detected.\nDetails: {e}\n\n---\n")
+            target.insert("end", f"\nSystem Error: {e}\n\n---\n")
+            self.log_audit(q, f"Error: {str(e)}")
             
         target.configure(state="disabled")
         target.see("end")
 
-    # --- ADVANCED SETTINGS MENU ---
-    def open_settings(self):
-        win = ctk.CTkToplevel(self)
-        win.title("Advanced Configuration")
-        win.geometry("450x450")
-        win.attributes("-topmost", True)
-        win.configure(fg_color="#0f172a")
-        
-        ctk.CTkLabel(win, text="System Configuration", font=("Segoe UI", 22, "bold")).pack(pady=20)
-        
-        ctk.CTkLabel(win, text="OpenRouter API Key:", font=("Segoe UI", 12)).pack(anchor="w", padx=40)
-        api_entry = ctk.CTkEntry(win, width=370, show="*")
-        api_entry.insert(0, self.api_key)
-        api_entry.pack(pady=5)
-
-        ctk.CTkLabel(win, text="App Vault Password (Optional):", font=("Segoe UI", 12)).pack(anchor="w", padx=40)
-        pwd_entry = ctk.CTkEntry(win, width=370, show="*")
-        pwd_entry.insert(0, self.app_password)
-        pwd_entry.pack(pady=5)
-
-        def apply_changes():
-            self.app_password = pwd_entry.get()
-            self.save_settings()
-            
-            new_key = api_entry.get().strip()
-            if new_key != self.api_key:
-                self.update_env_file(new_key)
-                
-            win.destroy()
-            
-        ctk.CTkButton(win, text="Apply & Verify", fg_color="#3b82f6", height=40, font=("Segoe UI", 14, "bold"), command=apply_changes).pack(pady=30)
-
-    # --- DATABASE & STORAGE MANAGEMENT ---
+    # --- ADVANCED INGESTION & METADATA CHUNKING ---
     def load_db(self):
         index = os.path.join(SOURCE_DIR, "faiss_index")
         if os.path.exists(index):
@@ -240,16 +198,53 @@ class PolicyAdvisorMaster(ctk.CTk):
         if files:
             for f in files: shutil.copy(f, SOURCE_DIR)
             threading.Thread(target=self.rebuild_db, daemon=True).start()
-            messagebox.showinfo("Processing", "Documents added. Indexing in background...")
+            messagebox.showinfo("Processing", "Documents added. Deep indexing in background...")
 
     def rebuild_db(self):
         docs = []
         for f in os.listdir(SOURCE_DIR):
-            if f.endswith(".pdf"): docs.extend(PyMuPDFLoader(os.path.join(SOURCE_DIR, f)).load())
+            if f.endswith(".pdf"): 
+                # PyMuPDFLoader automatically extracts page numbers into metadata
+                loader = PyMuPDFLoader(os.path.join(SOURCE_DIR, f))
+                docs.extend(loader.load())
+        
         if docs:
-            splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-            self.db = FAISS.from_documents(splitter.split_documents(docs), self.embeddings)
+            # Hierarchical Semantic Chunking approach
+            splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=250, separators=["\n\n", "\n", ".", " "])
+            split_docs = splitter.split_documents(docs)
+            
+            # Clean up metadata for citation engine
+            for d in split_docs:
+                d.metadata['source'] = os.path.basename(d.metadata.get('source', 'Unknown'))
+                
+            self.db = FAISS.from_documents(split_docs, self.embeddings)
             self.db.save_local(os.path.join(SOURCE_DIR, "faiss_index"))
+
+    # --- SETTINGS ---
+    def open_settings(self):
+        win = ctk.CTkToplevel(self)
+        win.title("Security & Credentials")
+        win.geometry("450x300")
+        win.attributes("-topmost", True)
+        win.configure(fg_color="#0f172a")
+        
+        ctk.CTkLabel(win, text="OpenRouter API Key:", font=("Segoe UI", 12)).pack(pady=(20, 5))
+        api_entry = ctk.CTkEntry(win, width=370, show="*"); api_entry.insert(0, self.api_key); api_entry.pack()
+
+        ctk.CTkLabel(win, text="App Vault Password:", font=("Segoe UI", 12)).pack(pady=(15, 5))
+        pwd_entry = ctk.CTkEntry(win, width=370, show="*"); pwd_entry.insert(0, self.app_password); pwd_entry.pack()
+
+        def apply_changes():
+            self.app_password = pwd_entry.get()
+            with open(SAVE_FILE, "w") as f: json.dump({"app_password": self.app_password}, f)
+            new_key = api_entry.get().strip()
+            if new_key != self.api_key:
+                with open(ENV_FILE, "w") as f: f.write(f"OPENROUTER_API_KEY={new_key}\n")
+                self.api_key = new_key
+                os.environ["OPENROUTER_API_KEY"] = new_key
+            win.destroy()
+            
+        ctk.CTkButton(win, text="Apply", fg_color="#3b82f6", command=apply_changes).pack(pady=30)
 
     def load_settings(self):
         if os.path.exists(SAVE_FILE):
@@ -258,10 +253,6 @@ class PolicyAdvisorMaster(ctk.CTk):
                     d = json.load(f)
                     self.app_password = d.get("app_password", "")
             except: pass
-
-    def save_settings(self):
-        with open(SAVE_FILE, "w") as f:
-            json.dump({"app_password": getattr(self, 'app_password', "")}, f)
 
 if __name__ == "__main__":
     app = PolicyAdvisorMaster()
