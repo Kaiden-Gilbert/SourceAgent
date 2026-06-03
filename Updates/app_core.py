@@ -1,4 +1,4 @@
-import os, sys, threading, shutil, json, time, urllib.request, subprocess, math, random, webbrowser, re
+import os, sys, threading, shutil, json, time, urllib.request, subprocess, math, random, webbrowser, re, queue
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -11,18 +11,19 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 
-# --- MULTI-MODAL DOCUMENT LOADERS ---
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader, CSVLoader
 
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 47.0 
+CURRENT_VERSION = 48.0 
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
 REPO_URL = "https://github.com/Kaiden-Gilbert/SourceAgent"
+APP_CORE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/app_core.py"
 
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
 AUDIT_FILE = os.path.join(BASE_DIR, "audit_log.json")
 SAVE_FILE = os.path.join(BASE_DIR, "config.json")
+RECOVERY_FILE = os.path.join(BASE_DIR, "recovery.json")
 os.makedirs(SOURCE_DIR, exist_ok=True)
 
 OLLAMA_INSTALLER_URL = "https://ollama.com/download/OllamaSetup.exe"
@@ -47,16 +48,42 @@ STUDIO_PROMPTS = {
 }
 
 # ==========================================
-# DEPENDENCY CHECKER & THEME LOADER
+# DEPENDENCY CHECKER & AUDIO QUEUE
 # ==========================================
 def ensure_dependencies():
     packages = ["docx2txt", "pyttsx3"]
+    if os.name == 'nt':
+        packages.append("pywin32") # Required for background SAPI5 TTS
     for pkg in packages:
         try: __import__(pkg)
         except ImportError: subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "-q"])
 
 ensure_dependencies()
-import pyttsx3
+
+# The dedicated Audio Queue to prevent Windows COM Threading crashes
+audio_queue = queue.Queue()
+
+def tts_worker_loop():
+    try:
+        if os.name == 'nt':
+            import pythoncom
+            pythoncom.CoInitialize()
+        import pyttsx3
+        engine = pyttsx3.init()
+        engine.setProperty('rate', 170)
+        while True:
+            text = audio_queue.get()
+            if text is None: break
+            # Scrub markdown before speaking
+            clean_text = re.sub(r'[*#]', '', text)
+            clean_text = re.sub(r'\[Verified Sources:.*?\]', '', clean_text)
+            engine.say(clean_text)
+            engine.runAndWait()
+            audio_queue.task_done()
+    except Exception as e:
+        print(f"Audio Engine Initialization Fault: {e}")
+
+threading.Thread(target=tts_worker_loop, daemon=True).start()
 
 def load_initial_theme():
     theme_mode = "Dark"; accent_color = "blue"
@@ -95,9 +122,9 @@ class BouncySplash(ctk.CTkToplevel):
         
         self.canvas.create_text(300, 130, text="Source Agent", font=("Segoe UI", 48, "bold"), fill="#ffffff")
         
-        splashes = ["100% Offline!", "Audio Mode Active!", "Now with Multi-Modal Ingestion!", "Omni-Reader Active!", "V47 Deployed!"]
+        splashes = ["100% Offline!", "Audio Mode Fixed!", "Seamless Recovery Active!", "Omni-Reader Active!", "V48 Deployed!"]
         self.splash_id = self.canvas.create_text(450, 180, text=random.choice(splashes), font=("Segoe UI", 16, "bold", "italic"), fill="#facc15")
-        self.status_id = self.canvas.create_text(300, 260, text="Initializing Omni-Reader...", font=("Segoe UI", 12), fill="#94a3b8")
+        self.status_id = self.canvas.create_text(300, 260, text="Initializing Architecture...", font=("Segoe UI", 12), fill="#94a3b8")
 
         self.time_step = 0; self.running = True
         self.animate()
@@ -147,31 +174,49 @@ class NotificationToast(ctk.CTkFrame):
             self.after(15, lambda: self.animate_out(step + 1))
         else: self.destroy()
 
-class UpdateAdvisoryModal(ctk.CTkToplevel):
+class OTAUpdateModal(ctk.CTkToplevel):
     def __init__(self, master, new_version, changelog):
         super().__init__(master)
-        self.title("Software Update Advisory")
-        self.geometry("500x380")
+        self.title("Software Update Available")
+        self.geometry("500x400")
         self.attributes("-topmost", True)
+        self.master_app = master
         
-        self.update_idletasks(); x = (self.winfo_screenwidth() // 2) - 250; y = (self.winfo_screenheight() // 2) - 190
+        self.update_idletasks(); x = (self.winfo_screenwidth() // 2) - 250; y = (self.winfo_screenheight() // 2) - 200
         self.geometry(f"+{x}+{y}")
         
-        ctk.CTkLabel(self, text=f"Update V{new_version} Available", font=("Segoe UI", 24, "bold"), text_color="#f59e0b").pack(pady=(20, 5))
+        ctk.CTkLabel(self, text=f"Update V{new_version} Ready", font=("Segoe UI", 24, "bold"), text_color="#10b981").pack(pady=(20, 5))
         ctk.CTkLabel(self, text="Release Notes & Changelog:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=30, pady=(10, 0))
         
-        self.notes = ctk.CTkTextbox(self, width=440, height=160, font=("Segoe UI", 13), fg_color="#1e293b")
+        self.notes = ctk.CTkTextbox(self, width=440, height=180, font=("Segoe UI", 13), fg_color="#1e293b")
         self.notes.pack(padx=30, pady=5); self.notes.insert("1.0", changelog); self.notes.configure(state="disabled")
         
-        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent"); self.btn_frame.pack(fill="x", padx=30, pady=15)
+        self.pb = ctk.CTkProgressBar(self, mode="indeterminate", width=440, progress_color="#10b981")
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent"); self.btn_frame.pack(fill="x", padx=30, pady=20)
         
-        self.btn_cancel = ctk.CTkButton(self.btn_frame, text="Dismiss", fg_color="#475569", width=100, command=self.destroy); self.btn_cancel.pack(side="left")
-        self.btn_github = ctk.CTkButton(self.btn_frame, text="View on GitHub", font=("Segoe UI", 13, "bold"), fg_color="#10b981", hover_color="#059669", command=self.open_repo)
-        self.btn_github.pack(side="right")
+        self.btn_cancel = ctk.CTkButton(self.btn_frame, text="Skip", fg_color="#475569", width=100, command=self.destroy); self.btn_cancel.pack(side="left")
+        self.btn_update = ctk.CTkButton(self.btn_frame, text="Apply Update (No Data Loss)", font=("Segoe UI", 13, "bold"), fg_color="#10b981", hover_color="#059669", command=self.execute_update)
+        self.btn_update.pack(side="right")
 
-    def open_repo(self):
-        webbrowser.open(REPO_URL)
-        self.destroy()
+    def execute_update(self):
+        self.btn_cancel.configure(state="disabled"); self.btn_update.configure(state="disabled", text="Hot-Swapping Code...")
+        self.pb.pack(before=self.btn_frame, pady=(0, 10)); self.pb.start()
+        
+        # Save the workspace state BEFORE restarting
+        self.master_app.save_workspace_state()
+        
+        threading.Thread(target=self._download_and_replace, daemon=True).start()
+
+    def _download_and_replace(self):
+        try:
+            req = urllib.request.Request(APP_CORE_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
+            with urllib.request.urlopen(req, timeout=15) as r: new_code = r.read().decode('utf-8')
+            current_file = os.path.abspath(__file__)
+            with open(current_file, "w", encoding="utf-8") as f: f.write(new_code)
+            self.after(0, lambda: self.btn_update.configure(text="Restarting App...")); time.sleep(1)
+            os.execv(sys.executable, ['python', current_file])
+        except Exception as e:
+            self.after(0, self.pb.stop); self.after(0, lambda: messagebox.showerror("Update Failed", f"Could not download update: {e}")); self.after(0, self.destroy)
 
 class ContactDeveloperWindow(ctk.CTkToplevel):
     def __init__(self, master):
@@ -260,8 +305,7 @@ class SourceAgentMaster(ctk.CTk):
                 with open(SAVE_FILE, "r") as f:
                     d = json.load(f)
                     saved_model = d.get("ai_model", "tinyllama")
-                    if "gemini" in saved_model or "claude" in saved_model or "/" in saved_model:
-                        self.ai_model = "tinyllama"
+                    if "gemini" in saved_model or "claude" in saved_model or "/" in saved_model: self.ai_model = "tinyllama"
                     else: self.ai_model = saved_model
             except: pass
 
@@ -293,6 +337,9 @@ class SourceAgentMaster(ctk.CTk):
         self.load_db()
         self.refresh_source_list()
         
+        # Check for Workspace Recovery state
+        self.restore_workspace_state()
+        
         self.splash.close(); self.deiconify()
         threading.Thread(target=self.sentinel_update_check, daemon=True).start()
 
@@ -305,8 +352,8 @@ class SourceAgentMaster(ctk.CTk):
                 changelog = data.get('changelog', "Bug fixes and performance improvements.")
                 
                 if cloud_version > CURRENT_VERSION:
-                    msg = "A new update is available for Source Agent. Click below to review the release notes."
-                    self.after(0, lambda: NotificationToast(self, "Update Alert", msg, color="#f59e0b", action_text="Review Update", action_cmd=lambda: UpdateAdvisoryModal(self, cloud_version, changelog)))
+                    msg = "A new OTA Update is available. It can be applied instantly with zero data loss."
+                    self.after(0, lambda: NotificationToast(self, "Update Available", msg, color="#10b981", action_text="Install Now", action_cmd=lambda: OTAUpdateModal(self, cloud_version, changelog)))
                     return 
                 elif manual:
                     self.after(0, lambda: messagebox.showinfo("Up to Date", f"You are currently running the latest version (V{CURRENT_VERSION})."))
@@ -314,6 +361,38 @@ class SourceAgentMaster(ctk.CTk):
             if manual: self.after(0, lambda: messagebox.showerror("Network Error", f"Could not reach the update server: {e}"))
         
         if not manual: self.after(300000, lambda: threading.Thread(target=self.sentinel_update_check, daemon=True).start())
+
+    # --- STATE PERSISTENCE ENGINE ---
+    def save_workspace_state(self):
+        """Dumps current UI context to disk so an update reboot is seamless."""
+        try:
+            state = {
+                "chat_content": self.chat.get("1.0", "end-1c"),
+                "studio_content": self.studio_box.get("1.0", "end-1c")
+            }
+            with open(RECOVERY_FILE, "w") as f:
+                json.dump(state, f)
+        except Exception as e: print(f"State Save Error: {e}")
+
+    def restore_workspace_state(self):
+        """Reloads UI context if a recovery file exists, then deletes the file."""
+        if os.path.exists(RECOVERY_FILE):
+            try:
+                with open(RECOVERY_FILE, "r") as f:
+                    state = json.load(f)
+                    
+                if state.get("chat_content"):
+                    self.chat.configure(state="normal")
+                    self.chat.delete("1.0", "end")
+                    self.chat.insert("1.0", state["chat_content"])
+                    self.chat.configure(state="disabled")
+                    
+                if state.get("studio_content"):
+                    self.studio_box.delete("1.0", "end")
+                    self.studio_box.insert("1.0", state["studio_content"])
+                    
+                os.remove(RECOVERY_FILE)
+            except Exception as e: print(f"State Restore Error: {e}")
 
     def setup_ui(self):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
@@ -380,18 +459,15 @@ class SourceAgentMaster(ctk.CTk):
             try:
                 for f in os.listdir(SOURCE_DIR):
                     file_path = os.path.join(SOURCE_DIR, f)
-                    if os.path.isfile(file_path):
-                        os.remove(file_path)
+                    if os.path.isfile(file_path): os.remove(file_path)
                 
                 index_path = os.path.join(SOURCE_DIR, "faiss_index")
-                if os.path.exists(index_path):
-                    shutil.rmtree(index_path)
+                if os.path.exists(index_path): shutil.rmtree(index_path)
                 
                 self.db = None
                 self.refresh_source_list()
                 messagebox.showinfo("Purge Complete", "The vault has been completely wiped. Memory matrix reset.")
-            except Exception as e:
-                messagebox.showerror("IO Error", f"Failed to purge vault: {e}")
+            except Exception as e: messagebox.showerror("IO Error", f"Failed to purge vault: {e}")
 
     def delete_source(self, filename):
         if messagebox.askyesno("Confirm Removal", f"Are you sure you want to erase '{filename}'?"):
@@ -409,26 +485,6 @@ class SourceAgentMaster(ctk.CTk):
                     self.refresh_source_list()
                     threading.Thread(target=self.rebuild_db, daemon=True).start()
             except Exception as e: messagebox.showerror("IO Fault", f"Failed to prune document: {e}")
-
-    # ------------------------------------------
-    # TTS AUDIO ENGINE (NON-BLOCKING)
-    # ------------------------------------------
-    def speak_text(self, raw_text):
-        """Scrubs markdown and runs TTS engine in a protected background thread."""
-        def _audio_worker():
-            try:
-                # Regex to strip out markdown asterisks, hashes, and source citations for clean reading
-                clean_text = re.sub(r'[*#]', '', raw_text)
-                clean_text = re.sub(r'\[Verified Sources:.*?\]', '', clean_text)
-                
-                engine = pyttsx3.init()
-                engine.setProperty('rate', 170) # Set a comfortable speaking pace
-                engine.say(clean_text)
-                engine.runAndWait()
-            except Exception as e:
-                print(f"TTS Engine Error: {e}")
-                
-        threading.Thread(target=_audio_worker, daemon=True).start()
 
     # ------------------------------------------
     # TAB 1: AGENTIC CHAT 
@@ -456,7 +512,7 @@ class SourceAgentMaster(ctk.CTk):
         self.entry.bind("<Return>", lambda e: self.send_chat())
         
         self.research_var = ctk.BooleanVar(value=False)
-        self.audio_var = ctk.BooleanVar(value=False) # NEW Audio Toggle
+        self.audio_var = ctk.BooleanVar(value=False)
         
         toggles_frame = ctk.CTkFrame(input_frame, fg_color="transparent")
         toggles_frame.grid(row=0, column=1, padx=(0, 10))
@@ -509,9 +565,8 @@ class SourceAgentMaster(ctk.CTk):
             citations = ", ".join(sources_list) if sources_list else "None"
             self.safe_insert_tagged(self.chat, f"\n\n[Verified Sources: {citations}]\n---\n", "source")
             
-            # TRIGGER TTS IF ENABLED
             if self.audio_var.get():
-                self.speak_text(full_response)
+                audio_queue.put(full_response)
             
             self.log_audit(q, "Success", sources_list)
             self.after(0, self.refresh_analytics)
@@ -571,7 +626,7 @@ class SourceAgentMaster(ctk.CTk):
                 full_response += chunk.content
                 
             if self.studio_audio_var.get():
-                self.speak_text(full_response)
+                audio_queue.put(full_response)
             
             self.log_audit(f"Studio Gen: {doc_type}", "Success", list(set([d.metadata.get('source', 'Unknown') for d in docs])))
             self.after(0, self.refresh_analytics)
