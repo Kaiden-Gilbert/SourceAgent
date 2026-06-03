@@ -7,13 +7,15 @@ from datetime import datetime
 
 from langchain_community.chat_models import ChatOllama
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 
+# --- MULTI-MODAL DOCUMENT LOADERS ---
+from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader, CSVLoader
+
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 45.2
+CURRENT_VERSION = 46.0
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
 APP_CORE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/app_core.py"
 
@@ -45,8 +47,17 @@ STUDIO_PROMPTS = {
 }
 
 # ==========================================
-# PRE-BOOT THEME LOADER
+# DEPENDENCY CHECKER & THEME LOADER
 # ==========================================
+def ensure_dependencies():
+    """Silently ensures multi-modal loaders are installed before boot."""
+    try:
+        import docx2txt
+    except ImportError:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "docx2txt", "-q"])
+
+ensure_dependencies()
+
 def load_initial_theme():
     theme_mode = "Dark"
     accent_color = "blue"
@@ -85,9 +96,9 @@ class BouncySplash(ctk.CTkToplevel):
         
         self.canvas.create_text(300, 130, text="Source Agent", font=("Segoe UI", 48, "bold"), fill="#ffffff")
         
-        splashes = ["100% Offline!", "Air-Gapped!", "Now with OTA Updates!", "TinyLlama Powered!", "Pixel Perfect!"]
+        splashes = ["100% Offline!", "Air-Gapped!", "Now with Multi-Modal Ingestion!", "Omni-Reader Active!", "Pixel Perfect!"]
         self.splash_id = self.canvas.create_text(450, 180, text=random.choice(splashes), font=("Segoe UI", 16, "bold", "italic"), fill="#facc15")
-        self.status_id = self.canvas.create_text(300, 260, text="Initializing core...", font=("Segoe UI", 12), fill="#94a3b8")
+        self.status_id = self.canvas.create_text(300, 260, text="Initializing Omni-Reader...", font=("Segoe UI", 12), fill="#94a3b8")
 
         self.time_step = 0; self.running = True
         self.animate()
@@ -106,7 +117,6 @@ class BouncySplash(ctk.CTkToplevel):
         self.running = False; self.destroy()
 
 class NotificationToast(ctk.CTkFrame):
-    """Upgraded Interactive Toast with Action Button support"""
     def __init__(self, parent, title, message, color="#f59e0b", action_text=None, action_cmd=None):
         super().__init__(parent, fg_color="#1e293b", border_width=2, border_color=color, corner_radius=8)
         self.parent = parent
@@ -117,7 +127,7 @@ class NotificationToast(ctk.CTkFrame):
         if action_text and action_cmd:
             self.btn = ctk.CTkButton(self, text=action_text, font=("Segoe UI", 12, "bold"), fg_color=color, hover_color="#fbbf24", text_color="#020617", height=30, command=lambda: self.execute_action(action_cmd))
             self.btn.pack(anchor="w", padx=15, pady=(0, 15))
-            self.stay_open = True # Keep open until clicked
+            self.stay_open = True
         else:
             self.stay_open = False
         
@@ -142,7 +152,6 @@ class NotificationToast(ctk.CTkFrame):
         else: self.destroy()
 
 class OTAUpdateModal(ctk.CTkToplevel):
-    """Displays Release Notes and handles the Hot-Swapping Update"""
     def __init__(self, master, new_version, changelog):
         super().__init__(master)
         self.title("Software Update")
@@ -183,22 +192,17 @@ class OTAUpdateModal(ctk.CTkToplevel):
 
     def _download_and_replace(self):
         try:
-            # 1. Download the new script
             req = urllib.request.Request(APP_CORE_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
             with urllib.request.urlopen(req, timeout=15) as r:
                 new_code = r.read().decode('utf-8')
                 
-            # 2. Overwrite the current running file
             current_file = os.path.abspath(__file__)
             with open(current_file, "w", encoding="utf-8") as f:
                 f.write(new_code)
                 
             self.after(0, lambda: self.btn_update.configure(text="Restarting App..."))
             time.sleep(1)
-            
-            # 3. Hard Reboot the Process
             os.execv(sys.executable, ['python', current_file])
-            
         except Exception as e:
             self.after(0, self.pb.stop)
             self.after(0, lambda: messagebox.showerror("Update Failed", f"Could not download update: {e}"))
@@ -342,7 +346,6 @@ class SourceAgentMaster(ctk.CTk):
         threading.Thread(target=self.sentinel_update_check, daemon=True).start()
 
     def sentinel_update_check(self, manual=False):
-        """Silently polls GitHub for updates. If manual=True, shows alert if up-to-date."""
         try:
             req = urllib.request.Request(VERSION_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
             with urllib.request.urlopen(req, timeout=5) as r:
@@ -353,7 +356,7 @@ class SourceAgentMaster(ctk.CTk):
                 if cloud_version > CURRENT_VERSION:
                     msg = f"Version {cloud_version} is available. Click below to review the changes and apply the Over-The-Air hotfix."
                     self.after(0, lambda: NotificationToast(self, "System Update Found", msg, color="#f59e0b", action_text="Review Update", action_cmd=lambda: OTAUpdateModal(self, cloud_version, changelog)))
-                    return # Stop polling loop
+                    return 
                 elif manual:
                     self.after(0, lambda: messagebox.showinfo("Up to Date", f"You are currently running the latest version (V{CURRENT_VERSION})."))
         except Exception as e: 
@@ -373,7 +376,7 @@ class SourceAgentMaster(ctk.CTk):
         ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 24, "bold"), text_color=text_primary).pack(pady=(30, 10))
         ctk.CTkLabel(s, text="🔒 100% Offline Air-Gapped Mode", font=("Segoe UI", 11), text_color="#10b981").pack(pady=(0, 25))
         
-        ctk.CTkButton(s, text="📂 Ingest PDF Sources", font=("Segoe UI", 14, "bold"), height=45, command=self.add_docs).pack(fill="x", padx=20, pady=(10, 15))
+        ctk.CTkButton(s, text="📂 Ingest Source Files", font=("Segoe UI", 14, "bold"), height=45, command=self.add_docs).pack(fill="x", padx=20, pady=(10, 15))
         ctk.CTkLabel(s, text="📚 Ingested Sources:", font=("Segoe UI", 13, "bold"), text_color="#94a3b8").pack(anchor="w", padx=20, pady=(10, 5))
         
         self.sources_scroll = ctk.CTkScrollableFrame(s, height=250)
@@ -399,7 +402,9 @@ class SourceAgentMaster(ctk.CTk):
     def refresh_source_list(self):
         for widget in self.sources_scroll.winfo_children(): widget.destroy()
         try:
-            files = [f for f in os.listdir(SOURCE_DIR) if f.endswith(".pdf")]
+            # Update to look for all supported file types
+            valid_exts = (".pdf", ".txt", ".docx", ".csv")
+            files = [f for f in os.listdir(SOURCE_DIR) if f.lower().endswith(valid_exts)]
             if not files:
                 ctk.CTkLabel(self.sources_scroll, text="No sources ingested.", font=("Segoe UI", 12, "italic"), text_color="#64748b").pack(pady=15)
                 return
@@ -417,7 +422,8 @@ class SourceAgentMaster(ctk.CTk):
                 file_path = os.path.join(SOURCE_DIR, filename)
                 if os.path.exists(file_path): os.remove(file_path)
                 
-                if not [f for f in os.listdir(SOURCE_DIR) if f.endswith(".pdf")]:
+                valid_exts = (".pdf", ".txt", ".docx", ".csv")
+                if not [f for f in os.listdir(SOURCE_DIR) if f.lower().endswith(valid_exts)]:
                     index_path = os.path.join(SOURCE_DIR, "faiss_index")
                     if os.path.exists(index_path): shutil.rmtree(index_path)
                     self.db = None
@@ -528,7 +534,7 @@ class SourceAgentMaster(ctk.CTk):
 
     def generate_studio_doc(self):
         if not self.db:
-            messagebox.showwarning("No Data", "Please ingest PDF sources first before generating documents.")
+            messagebox.showwarning("No Data", "Please ingest files first before generating documents.")
             return
             
         doc_type = self.doc_type_menu.get()
@@ -665,17 +671,37 @@ class SourceAgentMaster(ctk.CTk):
             except: self.db = None
 
     def add_docs(self):
-        files = filedialog.askopenfilenames(filetypes=[("PDF Documents", "*.pdf")])
+        files = filedialog.askopenfilenames(filetypes=[
+            ("Supported Documents", "*.pdf;*.txt;*.docx;*.csv"),
+            ("PDF Documents", "*.pdf"),
+            ("Text Files", "*.txt"),
+            ("Word Documents", "*.docx"),
+            ("CSV Files", "*.csv"),
+            ("All Files", "*.*")
+        ])
         if files:
             for f in files: shutil.copy(f, SOURCE_DIR)
             self.refresh_source_list()
             threading.Thread(target=self.rebuild_db, daemon=True).start()
-            messagebox.showinfo("Processing", "Documents added. Building vector table...")
+            messagebox.showinfo("Processing", "Documents added. Building vector table via Omni-Reader...")
 
     def rebuild_db(self):
         docs = []
         for f in os.listdir(SOURCE_DIR):
-            if f.endswith(".pdf"): docs.extend(PyMuPDFLoader(os.path.join(SOURCE_DIR, f)).load())
+            file_path = os.path.join(SOURCE_DIR, f)
+            ext = f.lower().split('.')[-1]
+            try:
+                if ext == "pdf":
+                    docs.extend(PyMuPDFLoader(file_path).load())
+                elif ext == "txt":
+                    docs.extend(TextLoader(file_path, encoding="utf-8").load())
+                elif ext == "docx":
+                    docs.extend(Docx2txtLoader(file_path).load())
+                elif ext == "csv":
+                    docs.extend(CSVLoader(file_path).load())
+            except Exception as e:
+                print(f"Error loading {f}: {e}")
+                
         if docs:
             splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=150)
             split_docs = splitter.split_documents(docs)
