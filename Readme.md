@@ -37,6 +37,7 @@ If you boot the agent while connected to the internet, it will quickly ping the 
 This project is actively maintained. If you encounter any bugs, experience unexpected behavior, or have feature recommendations to improve the agent, please reach out.
 
 **Maintainer:** Kaiden Gilbert  
-**Owner:** Kaiden Gilbert
 
+*There is no special copyright preventing yoou from using this code as your own as it is 100% vibe coded!*
 *Please submit all bug reports or feature requests via email or by opening an Issue in this repository.*
+*You can contact the developer aswell inside the application!*
