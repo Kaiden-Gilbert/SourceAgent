@@ -13,7 +13,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 44.0
+CURRENT_VERSION = 45.0
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
 
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
@@ -38,25 +38,43 @@ Conduct a Deep Research synthesis on the provided context.
 4. Ensure every factual claim is strictly grounded in the text."""
 
 STUDIO_PROMPTS = {
-    "Executive Briefing": "You are an executive assistant. Using the provided context, write a high-level Executive Briefing. Use professional formatting, clear headings, and bullet points to summarize the main objectives, key data points, and conclusions found in the text. Do not invent information.",
-    "FAQ Document": "You are a technical writer. Using the provided context, generate a Frequently Asked Questions (FAQ) document. Identify the 5 most important topics in the text and format them as clear Question and Answer pairs.",
-    "Study Guide": "You are an expert tutor. Using the provided context, create a comprehensive Study Guide. Break down the core concepts into easy-to-understand sections, provide definitions for key terms found in the text, and summarize the main arguments."
+    "Executive Briefing": "You are an executive assistant. Using the provided context, write a high-level Executive Briefing. Use professional formatting, clear headings, and bullet points to summarize the main objectives, key data points, and conclusions found in the text.",
+    "FAQ Document": "You are a technical writer. Using the provided context, generate a Frequently Asked Questions (FAQ) document. Identify the 5 most important topics in the text and format them as Question and Answer pairs.",
+    "Study Guide": "You are an expert tutor. Using the provided context, create a comprehensive Study Guide. Break down the core concepts into easy-to-understand sections and provide definitions for key terms."
 }
 
 # ==========================================
-# UI COMPONENTS: MINECRAFT BOOT ANIMATION
+# PRE-BOOT THEME LOADER
+# ==========================================
+def load_initial_theme():
+    """Loads appearance settings before the UI classes initialize to prevent visual glitching."""
+    theme_mode = "Dark"
+    accent_color = "blue"
+    if os.path.exists(SAVE_FILE):
+        try:
+            with open(SAVE_FILE, "r") as f:
+                d = json.load(f)
+                theme_mode = d.get("theme_mode", "Dark")
+                accent_color = d.get("accent_color", "blue")
+        except: pass
+    ctk.set_appearance_mode(theme_mode)
+    ctk.set_default_color_theme(accent_color)
+    return theme_mode, accent_color
+
+_theme, _accent = load_initial_theme()
+
+# ==========================================
+# UI COMPONENTS: ANIMATIONS & MODALS
 # ==========================================
 class BouncySplash(ctk.CTkToplevel):
-    """Minecraft-style Boot-Up Animation Screen"""
     def __init__(self, master):
         super().__init__(master)
         self.title("Booting")
         self.geometry("600x300")
-        self.overrideredirect(True) # Borderless window
+        self.overrideredirect(True)
         self.attributes("-topmost", True)
         self.configure(fg_color="#020617")
         
-        # Center the splash screen
         self.update_idletasks()
         x = (self.winfo_screenwidth() // 2) - 300
         y = (self.winfo_screenheight() // 2) - 150
@@ -65,25 +83,13 @@ class BouncySplash(ctk.CTkToplevel):
         self.canvas = tk.Canvas(self, width=600, height=300, bg="#020617", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         
-        # Draw Main Title
         self.canvas.create_text(300, 130, text="Source Agent", font=("Segoe UI", 48, "bold"), fill="#ffffff")
         
-        # Draw Minecraft-style Splash Text
-        splashes = [
-            "100% Offline!", 
-            "Air-Gapped!", 
-            "Now with Streaming!", 
-            "TinyLlama Powered!", 
-            "Zero Trust Architecture!",
-            "No Cloud Needed!"
-        ]
-        self.splash_text = random.choice(splashes)
-        self.splash_id = self.canvas.create_text(450, 180, text=self.splash_text, font=("Segoe UI", 16, "bold", "italic"), fill="#facc15")
-        
+        splashes = ["100% Offline!", "Air-Gapped!", "Now with Streaming!", "TinyLlama Powered!", "Pixel Perfect!"]
+        self.splash_id = self.canvas.create_text(450, 180, text=random.choice(splashes), font=("Segoe UI", 16, "bold", "italic"), fill="#facc15")
         self.status_id = self.canvas.create_text(300, 260, text="Initializing core...", font=("Segoe UI", 12), fill="#94a3b8")
 
-        self.time_step = 0
-        self.running = True
+        self.time_step = 0; self.running = True
         self.animate()
 
     def set_status(self, text, color="#3b82f6"):
@@ -92,14 +98,12 @@ class BouncySplash(ctk.CTkToplevel):
     def animate(self):
         if not self.running: return
         self.time_step += 0.2
-        # Sine wave for the bouncy splash text
         y_offset = math.sin(self.time_step) * 10
         self.canvas.coords(self.splash_id, 450, 185 + y_offset)
         self.after(30, self.animate)
         
     def close(self):
-        self.running = False
-        self.destroy()
+        self.running = False; self.destroy()
 
 class NotificationToast(ctk.CTkFrame):
     def __init__(self, parent, title, message, color="#f59e0b"):
@@ -123,6 +127,66 @@ class NotificationToast(ctk.CTkFrame):
         else: self.destroy()
 
 # ==========================================
+# NEW: SUPPORT PORTAL
+# ==========================================
+class ContactDeveloperWindow(ctk.CTkToplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Contact Developer")
+        self.geometry("500x550")
+        self.attributes("-topmost", True)
+        
+        # Center Window
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - 250
+        y = (self.winfo_screenheight() // 2) - 275
+        self.geometry(f"+{x}+{y}")
+        
+        ctk.CTkLabel(self, text="✉️ Direct Support", font=("Segoe UI", 24, "bold")).pack(pady=(25, 5))
+        ctk.CTkLabel(self, text="Send a message directly to Kaiden Gilbert.", font=("Segoe UI", 12), text_color="#94a3b8").pack(pady=(0, 20))
+        
+        ctk.CTkLabel(self, text="Your Email Address:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=40)
+        self.email_entry = ctk.CTkEntry(self, width=420, height=40, placeholder_text="name@company.com")
+        self.email_entry.pack(padx=40, pady=(5, 15))
+        
+        ctk.CTkLabel(self, text="Message / Bug Report:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=40)
+        self.msg_box = ctk.CTkTextbox(self, width=420, height=200, font=("Segoe UI", 14))
+        self.msg_box.pack(padx=40, pady=(5, 20))
+        
+        self.pb = ctk.CTkProgressBar(self, mode="indeterminate", width=420)
+        
+        self.send_btn = ctk.CTkButton(self, text="Transmit Message", font=("Segoe UI", 14, "bold"), height=45, width=420, command=self.process_send)
+        self.send_btn.pack(padx=40, pady=(0, 20))
+
+    def process_send(self):
+        email = self.email_entry.get().strip()
+        msg = self.msg_box.get("1.0", "end-1c").strip()
+        
+        if not email or "@" not in email:
+            messagebox.showerror("Validation Error", "Please provide a valid return email address.")
+            return
+        if len(msg) < 10:
+            messagebox.showerror("Validation Error", "Please provide a bit more detail in your message.")
+            return
+            
+        self.send_btn.configure(state="disabled", text="Encrypting & Routing...")
+        self.pb.pack(before=self.send_btn, pady=(0, 15))
+        self.pb.start()
+        
+        threading.Thread(target=self._simulate_network_dispatch, args=(email, msg), daemon=True).start()
+
+    def _simulate_network_dispatch(self, email, msg):
+        # NOTE FOR KAIDEN: This is where you put your Formspree/SendGrid API POST request in the future.
+        # requests.post("https://formspree.io/f/YOUR_ID", json={"email": email, "message": msg})
+        
+        time.sleep(2.5) # Simulate network transit time
+        
+        self.after(0, self.pb.stop)
+        self.after(0, self.pb.forget)
+        self.after(0, lambda: messagebox.showinfo("Transmission Successful", "Your message has been securely routed to the developer. We will be in touch shortly!"))
+        self.after(0, self.destroy)
+
+# ==========================================
 # MAIN APPLICATION ENGINE
 # ==========================================
 class SourceAgentMaster(ctk.CTk):
@@ -130,11 +194,12 @@ class SourceAgentMaster(ctk.CTk):
         super().__init__()
         self.title(f"Source Agent | Enterprise Workspace V{CURRENT_VERSION}")
         self.geometry("1280x850")
-        ctk.set_appearance_mode("Dark")
         
         self.ai_model = "tinyllama"
-        self.withdraw() 
+        self.theme_mode = _theme
+        self.accent_color = _accent
         
+        self.withdraw() 
         self.splash = BouncySplash(self)
         self.after(100, self.check_environment)
 
@@ -193,7 +258,6 @@ class SourceAgentMaster(ctk.CTk):
         
         self.splash.close()
         self.deiconify()
-        
         threading.Thread(target=self.sentinel_update_check, daemon=True).start()
 
     def sentinel_update_check(self):
@@ -214,25 +278,31 @@ class SourceAgentMaster(ctk.CTk):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
         
         # --- SIDEBAR PANEL ---
-        s = ctk.CTkFrame(self, width=280, fg_color="#020617", corner_radius=0)
+        # The background color dynamically respects the current theme
+        sidebar_color = "#020617" if self.theme_mode == "Dark" else "#f1f5f9"
+        text_primary = "white" if self.theme_mode == "Dark" else "black"
+        
+        s = ctk.CTkFrame(self, width=280, fg_color=sidebar_color, corner_radius=0)
         s.grid(row=0, column=0, sticky="nsew")
-        ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 24, "bold")).pack(pady=(30, 10))
+        ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 24, "bold"), text_color=text_primary).pack(pady=(30, 10))
         ctk.CTkLabel(s, text="🔒 100% Offline Air-Gapped Mode", font=("Segoe UI", 11), text_color="#10b981").pack(pady=(0, 25))
         
-        info_frame = ctk.CTkFrame(s, fg_color="#0f172a", height=60)
-        info_frame.pack(fill="x", padx=20, pady=10)
-        ctk.CTkLabel(info_frame, text="Active Core: TinyLlama", font=("Segoe UI", 12, "bold"), text_color="#3b82f6").place(relx=0.5, rely=0.3, anchor="center")
-        ctk.CTkLabel(info_frame, text=f"Build Version: {CURRENT_VERSION}", font=("Segoe UI", 10), text_color="#94a3b8").place(relx=0.5, rely=0.7, anchor="center")
-
-        ctk.CTkButton(s, text="📂 Ingest PDF Sources", font=("Segoe UI", 14, "bold"), height=45, fg_color="#0ea5e9", hover_color="#0284c7", command=self.add_docs).pack(fill="x", padx=20, pady=(20, 15))
+        ctk.CTkButton(s, text="📂 Ingest PDF Sources", font=("Segoe UI", 14, "bold"), height=45, command=self.add_docs).pack(fill="x", padx=20, pady=(10, 15))
         
         ctk.CTkLabel(s, text="📚 Ingested Sources:", font=("Segoe UI", 13, "bold"), text_color="#94a3b8").pack(anchor="w", padx=20, pady=(10, 5))
         
-        self.sources_scroll = ctk.CTkScrollableFrame(s, fg_color="#0f172a", height=320)
-        self.sources_scroll.pack(fill="both", expand=True, padx=20, pady=(0, 25))
+        self.sources_scroll = ctk.CTkScrollableFrame(s, height=250)
+        self.sources_scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
+
+        # Bottom Tools
+        bottom_tools = ctk.CTkFrame(s, fg_color="transparent")
+        bottom_tools.pack(side="bottom", fill="x", pady=20)
+        
+        ctk.CTkButton(bottom_tools, text="⚙️ Workspace Settings", font=("Segoe UI", 13), fg_color="#475569", hover_color="#334155", command=self.open_settings).pack(fill="x", padx=20, pady=5)
+        ctk.CTkButton(bottom_tools, text="✉️ Contact Developer", font=("Segoe UI", 13), fg_color="#f59e0b", hover_color="#d97706", text_color="white", command=lambda: ContactDeveloperWindow(self)).pack(fill="x", padx=20, pady=5)
 
         # --- MAIN TABBED ENGINE ---
-        self.tabview = ctk.CTkTabview(self, fg_color="#0f172a", segmented_button_selected_color="#3b82f6")
+        self.tabview = ctk.CTkTabview(self)
         self.tabview.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
         
         self.tab_chat = self.tabview.add("Agentic Chat")
@@ -259,7 +329,7 @@ class SourceAgentMaster(ctk.CTk):
         except Exception as e: print(f"Error drawing source UI: {e}")
 
     def delete_source(self, filename):
-        if messagebox.askyesno("Confirm Removal", f"Are you sure you want to completely erase '{filename}' from the knowledge architecture?"):
+        if messagebox.askyesno("Confirm Removal", f"Are you sure you want to erase '{filename}'?"):
             try:
                 file_path = os.path.join(SOURCE_DIR, filename)
                 if os.path.exists(file_path): os.remove(file_path)
@@ -269,24 +339,20 @@ class SourceAgentMaster(ctk.CTk):
                     if os.path.exists(index_path): shutil.rmtree(index_path)
                     self.db = None
                     self.refresh_source_list()
-                    messagebox.showinfo("Sources Cleared", "All source documentation has been wiped clean. Database reset complete.")
                 else:
                     self.refresh_source_list()
                     threading.Thread(target=self.rebuild_db, daemon=True).start()
-                    messagebox.showinfo("Hot Rebuilding Core", f"'{filename}' was deleted successfully. Re-indexing remaining sources in background loop...")
-            except Exception as e:
-                messagebox.showerror("IO Fault", f"Failed to prune document resource: {e}")
+            except Exception as e: messagebox.showerror("IO Fault", f"Failed to prune document: {e}")
 
     # ------------------------------------------
-    # TAB 1: AGENTIC CHAT
+    # TAB 1: AGENTIC CHAT 
     # ------------------------------------------
     def build_chat_tab(self):
         self.tab_chat.grid_columnconfigure(0, weight=1); self.tab_chat.grid_rowconfigure(0, weight=1)
         
-        self.chat = ctk.CTkTextbox(self.tab_chat, font=("Segoe UI", 15), fg_color="#1e293b", spacing1=8, spacing3=8)
+        self.chat = ctk.CTkTextbox(self.tab_chat, font=("Segoe UI", 15), spacing1=8, spacing3=8)
         self.chat.grid(row=0, column=0, sticky="nsew", pady=(10, 20))
         
-        # BUG FIX: CustomTkinter crashes if you supply a 'font' argument to tag_config. We rely purely on color now.
         self.chat.tag_config("user", foreground="#3b82f6")
         self.chat.tag_config("agent", foreground="#10b981")
         self.chat.tag_config("source", foreground="#facc15")
@@ -305,7 +371,7 @@ class SourceAgentMaster(ctk.CTk):
         
         self.research_var = ctk.BooleanVar(value=False)
         ctk.CTkSwitch(input_frame, text="Deep Research", variable=self.research_var, font=("Segoe UI", 12, "bold")).grid(row=0, column=1, padx=(0, 10))
-        ctk.CTkButton(input_frame, text="Query Core", width=120, height=50, fg_color="#3b82f6", font=("Segoe UI", 14, "bold"), command=self.send_chat).grid(row=0, column=2)
+        ctk.CTkButton(input_frame, text="Query Core", width=120, height=50, font=("Segoe UI", 14, "bold"), command=self.send_chat).grid(row=0, column=2)
 
     def safe_insert_tagged(self, target, text, tag=None):
         def _update():
@@ -353,7 +419,7 @@ class SourceAgentMaster(ctk.CTk):
             self.after(0, self.refresh_analytics)
             
         except Exception as e: 
-            self.safe_insert_tagged(self.chat, f"\n[Execution Warning: Make sure Ollama is running in the background] {e}\n\n---\n", "error")
+            self.safe_insert_tagged(self.chat, f"\n[Execution Warning: Make sure Ollama is running] {e}\n\n---\n", "error")
             self.log_audit(q, f"Error: {str(e)}", [])
 
     # ------------------------------------------
@@ -372,10 +438,8 @@ class SourceAgentMaster(ctk.CTk):
         ctk.CTkButton(header_frame, text="✨ Generate Document", font=("Segoe UI", 13, "bold"), fg_color="#8b5cf6", hover_color="#7c3aed", command=self.generate_studio_doc).pack(side="left", padx=20)
         ctk.CTkButton(header_frame, text="💾 Save to File", font=("Segoe UI", 13), fg_color="#10b981", hover_color="#059669", command=self.export_studio).pack(side="right")
         
-        self.studio_box = ctk.CTkTextbox(self.tab_studio, font=("Consolas", 14), fg_color="#1e293b", spacing1=5, spacing3=5)
+        self.studio_box = ctk.CTkTextbox(self.tab_studio, font=("Consolas", 14), spacing1=5, spacing3=5)
         self.studio_box.grid(row=1, column=0, sticky="nsew")
-        
-        # UI Tags for Studio
         self.studio_box.tag_config("title", foreground="#3b82f6")
         self.studio_box.insert("1.0", "--- NOTEBOOK STUDIO ---\nSelect a document type above and click Generate to synthesize your ingested sources into a structured report.\n")
 
@@ -386,7 +450,6 @@ class SourceAgentMaster(ctk.CTk):
             
         doc_type = self.doc_type_menu.get()
         self.studio_box.delete("1.0", "end")
-        
         self.safe_insert_tagged(self.studio_box, f"# {doc_type.upper()}\nGenerated by Source Agent Studio\n\n", "title")
         threading.Thread(target=self._process_studio_generation, args=(doc_type,), daemon=True).start()
 
@@ -400,8 +463,7 @@ class SourceAgentMaster(ctk.CTk):
             llm = ChatOllama(model=self.ai_model, temperature=0.1, base_url="http://localhost:11434")
             
             stream = llm.stream([SystemMessage(content=sys_prompt), HumanMessage(content=f"Context:\n{context}\n\nTask: Generate the {doc_type}.")])
-            for chunk in stream:
-                self.safe_insert_tagged(self.studio_box, chunk.content)
+            for chunk in stream: self.safe_insert_tagged(self.studio_box, chunk.content)
             
             self.log_audit(f"Studio Gen: {doc_type}", "Success", list(set([d.metadata.get('source', 'Unknown') for d in docs])))
             self.after(0, self.refresh_analytics)
@@ -416,8 +478,7 @@ class SourceAgentMaster(ctk.CTk):
                 content = self.studio_box.get("1.0", "end-1c")
                 with open(file_path, "w", encoding="utf-8") as f: f.write(content)
                 messagebox.showinfo("Success", "Document successfully exported!")
-            except Exception as e:
-                messagebox.showerror("Error", f"Failed to save file: {e}")
+            except Exception as e: messagebox.showerror("Error", f"Failed to save file: {e}")
 
     # ------------------------------------------
     # TAB 3: SYSTEM ANALYTICS
@@ -434,7 +495,7 @@ class SourceAgentMaster(ctk.CTk):
         self.lbl_success = ctk.CTkLabel(self.stats_frame, text="Success Rate: 0%", font=("Segoe UI", 16, "bold"), text_color="#10b981")
         self.lbl_success.pack(side="right", padx=20)
         
-        self.log_box = ctk.CTkTextbox(self.tab_analytics, font=("Consolas", 13), fg_color="#1e293b")
+        self.log_box = ctk.CTkTextbox(self.tab_analytics, font=("Consolas", 13))
         self.log_box.grid(row=1, column=0, sticky="nsew")
         self.refresh_analytics()
 
@@ -464,6 +525,42 @@ class SourceAgentMaster(ctk.CTk):
             self.log_box.configure(state="normal"); self.log_box.delete("1.0", "end")
             self.log_box.insert("1.0", report); self.log_box.configure(state="disabled")
         except: pass
+
+    # ------------------------------------------
+    # ADVANCED SETTINGS MODAL
+    # ------------------------------------------
+    def open_settings(self):
+        win = ctk.CTkToplevel(self)
+        win.title("Workspace Settings")
+        win.geometry("500x350")
+        win.attributes("-topmost", True)
+        
+        tabs = ctk.CTkTabview(win)
+        tabs.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        tab_look = tabs.add("Appearance")
+        ctk.CTkLabel(tab_look, text="UI Theme Mode:", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(10,5))
+        theme_menu = ctk.CTkOptionMenu(tab_look, values=["Dark", "Light", "System"], width=400)
+        theme_menu.set(self.theme_mode.capitalize()); theme_menu.pack()
+        
+        ctk.CTkLabel(tab_look, text="Accent Color (Requires Restart):", font=("Segoe UI", 12, "bold")).pack(anchor="w", pady=(15,5))
+        color_menu = ctk.CTkOptionMenu(tab_look, values=["blue", "green", "dark-blue"], width=400)
+        color_menu.set(self.accent_color); color_menu.pack()
+
+        def apply_changes():
+            self.theme_mode = theme_menu.get()
+            self.accent_color = color_menu.get()
+            
+            ctk.set_appearance_mode(self.theme_mode)
+            
+            with open(SAVE_FILE, "w") as f: 
+                json.dump({
+                    "theme_mode": self.theme_mode,
+                    "accent_color": self.accent_color
+                }, f)
+            win.destroy()
+            
+        ctk.CTkButton(win, text="Save Workspace Preferences", font=("Segoe UI", 14, "bold"), height=45, command=apply_changes).pack(pady=(0, 20), padx=20, fill="x")
 
     # ------------------------------------------
     # UTILITIES
