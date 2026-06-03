@@ -11,7 +11,10 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 
-# --- CONFIGURATION ---
+# --- CONFIGURATION & VERSIONING ---
+CURRENT_VERSION = 40.0
+VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
+
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
 AUDIT_FILE = os.path.join(BASE_DIR, "audit_log.json")
@@ -26,6 +29,41 @@ You must ONLY use the provided facts inside the Context section below.
 If the answer is not directly stated in the Context, say exactly: "I cannot find this information in the provided sources."
 Do not make up facts. Do not use outside knowledge. Stick strictly to the text."""
 
+RESEARCH_PROMPT = """You are an Enterprise Research Analyst. 
+Conduct a Deep Research synthesis on the provided context. 
+1. Identify all core concepts related to the query.
+2. Compare evidence across multiple sources.
+3. Generate a highly detailed, structured Executive Report.
+4. Ensure every factual claim is strictly grounded in the text."""
+
+# ==========================================
+# UI COMPONENTS: TOAST & PROVISIONER
+# ==========================================
+class NotificationToast(ctk.CTkFrame):
+    """Smooth sliding notification system for Update Alerts"""
+    def __init__(self, parent, title, message, color="#f59e0b"):
+        super().__init__(parent, fg_color="#1e293b", border_width=2, border_color=color, corner_radius=8)
+        self.parent = parent
+        ctk.CTkLabel(self, text=title, font=("Segoe UI", 14, "bold"), text_color=color).pack(anchor="w", padx=15, pady=(10, 0))
+        ctk.CTkLabel(self, text=message, font=("Segoe UI", 12), justify="left", wraplength=300).pack(anchor="w", padx=15, pady=(0, 10))
+        
+        self.place(relx=0.5, rely=-0.2, anchor="n")
+        self.animate_in(0)
+        
+    def animate_in(self, step):
+        if step < 20:
+            self.place(relx=0.5, rely=-0.2 + (step * 0.012), anchor="n")
+            self.after(15, lambda: self.animate_in(step + 1))
+        else:
+            self.after(6000, self.animate_out, 0) # Stays on screen for 6 seconds
+            
+    def animate_out(self, step):
+        if step < 20:
+            self.place(relx=0.5, rely=0.04 - (step * 0.012), anchor="n")
+            self.after(15, lambda: self.animate_out(step + 1))
+        else:
+            self.destroy()
+
 class ProvisionerWindow(ctk.CTkToplevel):
     def __init__(self, master, mode="install"):
         super().__init__(master)
@@ -39,60 +77,39 @@ class ProvisionerWindow(ctk.CTkToplevel):
         
         self.lbl = ctk.CTkLabel(self, text="Initializing Local AI Engine...", font=("Segoe UI", 18, "bold"))
         self.lbl.pack(pady=(40, 20))
-        
-        self.pb = ctk.CTkProgressBar(self, mode="indeterminate", width=400)
-        self.pb.pack()
-        self.pb.start()
-        
+        self.pb = ctk.CTkProgressBar(self, mode="indeterminate", width=400); self.pb.pack(); self.pb.start()
         self.sub_lbl = ctk.CTkLabel(self, text="Please wait. Preparing environment...", font=("Segoe UI", 12), text_color="#94a3b8")
         self.sub_lbl.pack(pady=10)
         
-        if self.mode == "install":
-            threading.Thread(target=self.download_and_install_ollama, daemon=True).start()
-        elif self.mode == "pull":
-            threading.Thread(target=self.pull_tinyllama, daemon=True).start()
+        if self.mode == "install": threading.Thread(target=self.download_and_install_ollama, daemon=True).start()
+        elif self.mode == "pull": threading.Thread(target=self.pull_tinyllama, daemon=True).start()
 
     def disable_close(self): pass
 
     def download_and_install_ollama(self):
         self.after(0, lambda: self.lbl.configure(text="Downloading Ollama Engine..."))
         installer_path = os.path.join(BASE_DIR, "OllamaSetup.exe")
-        
         try:
             urllib.request.urlretrieve(OLLAMA_INSTALLER_URL, installer_path)
             self.after(0, lambda: self.lbl.configure(text="Installing Engine (Check Taskbar)..."))
             self.after(0, lambda: self.sub_lbl.configure(text="Please finish the setup wizard that popped up on your screen."))
-            
             subprocess.run([installer_path], check=True)
-            if os.path.exists(installer_path):
-                os.remove(installer_path)
-            
+            if os.path.exists(installer_path): os.remove(installer_path)
             self.after(0, lambda: self.lbl.configure(text="Installation Finished!"))
             time.sleep(2)
-            
-            # Safely route UI teardown and boot sequence to the main thread
-            self.after(0, self.destroy)
-            self.after(0, self.master_app.check_environment)
-            
+            self.after(0, self.destroy); self.after(0, self.master_app.check_environment)
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Setup Failed", f"Could not auto-install Ollama: {e}\nPlease run it manually from ollama.com"))
             self.after(0, lambda: sys.exit(1))
 
     def pull_tinyllama(self):
         self.after(0, lambda: self.lbl.configure(text="Pulling TinyLlama Core..."))
-        self.after(0, lambda: self.sub_lbl.configure(text="Downloading model parameters (~650MB) directly to your local drive."))
+        self.after(0, lambda: self.sub_lbl.configure(text="Downloading model parameters (~650MB)."))
         try:
-            startupinfo = None
-            if os.name == 'nt':
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-
+            startupinfo = subprocess.STARTUPINFO() if os.name == 'nt' else None
+            if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             subprocess.run(["ollama", "pull", "tinyllama"], check=True, startupinfo=startupinfo)
-            
-            # Safely route UI teardown and boot sequence to the main thread
-            self.after(0, self.destroy)
-            self.after(0, self.master_app.finish_boot)
-            
+            self.after(0, self.destroy); self.after(0, self.master_app.finish_boot)
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Download Failed", f"Ollama failed to pull tinyllama: {e}"))
             self.after(0, lambda: sys.exit(1))
@@ -119,7 +136,6 @@ class AnalyticsWindow(ctk.CTkToplevel):
             total_queries = len(logs)
             successful = sum(1 for log in logs if log.get("status") == "Success")
             success_rate = (successful / total_queries * 100) if total_queries > 0 else 0
-            
             all_sources = []
             for log in logs:
                 if isinstance(log.get("sources"), list): all_sources.extend(log.get("sources"))
@@ -131,35 +147,33 @@ class AnalyticsWindow(ctk.CTkToplevel):
             for src, count in Counter(all_sources).most_common(5): report += f"[{count} read-hits] -> {src}\n"
             report += "\n--- HISTORICAL RUNTIME LOG ---\n\n"
             for log in reversed(logs[-10:]): report += f"[{log.get('timestamp', '')[:16]}] Query: {log.get('query')}\n"
-                
             self.log_box.insert("1.0", report); self.log_box.configure(state="disabled")
         except Exception as e: self.log_box.insert("1.0", f"Error displaying metrics: {e}")
 
 
+# ==========================================
+# MAIN APPLICATION ENGINE
+# ==========================================
 class SourceAgentMaster(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Source Agent | TinyLlama Sovereign Engine V39.1")
-        self.geometry("1150x750")
+        self.title(f"Source Agent | Enterprise V{CURRENT_VERSION}")
+        self.geometry("1200x800")
         ctk.set_appearance_mode("Dark")
         
         self.ai_model = "tinyllama"
         self.withdraw()
-        
-        # Give the mainloop 100ms to stabilize before blocking the thread with subprocess checks
         self.after(100, self.check_environment)
 
     def check_environment(self):
-        # Verify if Ollama exists as an executable command
         try:
             startupinfo = subprocess.STARTUPINFO() if os.name == 'nt' else None
             if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             subprocess.run(["ollama", "--version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
-        except (FileNotFoundError, subprocess.CalledProcessError):
+        except:
             ProvisionerWindow(self, mode="install")
             return
 
-        # Verify if TinyLlama is already pulled locally
         try:
             startupinfo = subprocess.STARTUPINFO() if os.name == 'nt' else None
             if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -177,6 +191,25 @@ class SourceAgentMaster(ctk.CTk):
         self.db = None
         self.load_db()
         self.deiconify()
+        
+        # Start Sentinel Update Checker
+        threading.Thread(target=self.sentinel_update_check, daemon=True).start()
+
+    def sentinel_update_check(self):
+        """Silently polls GitHub for updates. Notifies user via Toast if an update exists."""
+        while True:
+            try:
+                req = urllib.request.Request(VERSION_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    data = json.loads(r.read().decode('utf-8'))
+                    cloud_version = float(data.get('app_version', CURRENT_VERSION))
+                    
+                    if cloud_version > CURRENT_VERSION:
+                        msg = f"Version {cloud_version} is available! Save your work and restart the application to apply the update automatically."
+                        self.after(0, lambda: NotificationToast(self, "System Update Available", msg, color="#f59e0b"))
+                        break # Stop polling once we notify them to prevent spam
+            except: pass
+            time.sleep(300) # Check every 5 minutes
 
     def setup_ui(self):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
@@ -189,14 +222,15 @@ class SourceAgentMaster(ctk.CTk):
         info_frame = ctk.CTkFrame(s, fg_color="#0f172a", height=60)
         info_frame.pack(fill="x", padx=20, pady=10)
         ctk.CTkLabel(info_frame, text="Active Core: TinyLlama (1.1B)", font=("Segoe UI", 12, "bold"), text_color="#3b82f6").place(relx=0.5, rely=0.3, anchor="center")
-        ctk.CTkLabel(info_frame, text="Temp Locked: 0.0 (Strict)", font=("Segoe UI", 10), text_color="#94a3b8").place(relx=0.5, rely=0.7, anchor="center")
+        ctk.CTkLabel(info_frame, text=f"Build Version: {CURRENT_VERSION}", font=("Segoe UI", 10), text_color="#94a3b8").place(relx=0.5, rely=0.7, anchor="center")
 
         ctk.CTkButton(s, text="📂 Ingest PDF Sources", font=("Segoe UI", 13), fg_color="#0ea5e9", hover_color="#0284c7", command=self.add_docs).pack(fill="x", padx=20, pady=(20, 10))
         ctk.CTkButton(s, text="📊 Performance Analytics", font=("Segoe UI", 13), fg_color="#8b5cf6", hover_color="#7c3aed", command=lambda: AnalyticsWindow(self)).pack(fill="x", padx=20, pady=10)
+        ctk.CTkButton(s, text="💾 Export Session Report", font=("Segoe UI", 13), fg_color="#10b981", hover_color="#059669", command=self.export_session).pack(fill="x", padx=20, pady=10)
         
         self.chat = ctk.CTkTextbox(self, font=("Segoe UI", 15), fg_color="#0f172a", spacing1=8, spacing3=8)
         self.chat.grid(row=0, column=1, sticky="nsew", padx=20, pady=(20, 10))
-        self.chat.insert("1.0", "SYSTEM: TinyLlama compute core activated. Ingest a document and query the localized vault directly.\n\n")
+        self.chat.insert("1.0", "SYSTEM: TinyLlama compute core activated. Ready for inquiry.\n\n")
         self.chat.configure(state="disabled")
         
         input_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -207,7 +241,9 @@ class SourceAgentMaster(ctk.CTk):
         self.entry.grid(row=0, column=0, sticky="ew", padx=(0, 10))
         self.entry.bind("<Return>", lambda e: self.send_main())
         
-        ctk.CTkButton(input_frame, text="Query local AI", width=140, height=50, fg_color="#3b82f6", hover_color="#2563eb", font=("Segoe UI", 14, "bold"), command=self.send_main).grid(row=0, column=1)
+        self.research_var = ctk.BooleanVar(value=False)
+        ctk.CTkSwitch(input_frame, text="Deep Research", variable=self.research_var, font=("Segoe UI", 12, "bold")).grid(row=0, column=1, padx=(0, 10))
+        ctk.CTkButton(input_frame, text="Query local AI", width=140, height=50, fg_color="#3b82f6", hover_color="#2563eb", font=("Segoe UI", 14, "bold"), command=self.send_main).grid(row=0, column=2)
 
     def log_audit(self, query, status, sources):
         entry = {"timestamp": datetime.now().isoformat(), "query": query, "status": status, "sources": sources}
@@ -218,6 +254,19 @@ class SourceAgentMaster(ctk.CTk):
             log_data.append(entry)
             with open(AUDIT_FILE, "w") as f: json.dump(log_data, f, indent=4)
         except: pass
+
+    def export_session(self):
+        """Allows users to save the current chat log to a text file for reporting."""
+        file_path = filedialog.asksaveasfilename(defaultextension=".txt", filetypes=[("Text File", "*.txt"), ("Markdown", "*.md")], title="Export Research Session")
+        if file_path:
+            try:
+                content = self.chat.get("1.0", "end-1c")
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(f"--- SOURCE AGENT RESEARCH EXPORT ---\nDate: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                    f.write(content)
+                messagebox.showinfo("Export Success", "Session successfully exported!")
+            except Exception as e:
+                messagebox.showerror("Export Error", f"Failed to save file: {e}")
 
     def safe_insert(self, text):
         def _update():
@@ -232,23 +281,22 @@ class SourceAgentMaster(ctk.CTk):
 
     def engine_generate(self, q):
         self.safe_insert(f"\nUSER: {q}\nAGENT: Inquiring localized text embeddings...\n")
+        is_deep_research = self.research_var.get()
         
         try:
             llm = ChatOllama(model=self.ai_model, temperature=0.0, base_url="http://localhost:11434")
-            context = ""
-            sources_list = []
+            context = ""; sources_list = []
             
             if self.db:
-                docs = self.db.as_retriever(search_kwargs={"k": 4}).invoke(q)
+                k_depth = 10 if is_deep_research else 4
+                docs = self.db.as_retriever(search_kwargs={"k": k_depth}).invoke(q)
                 context = "\n\n".join([f"Document Chunk:\n{d.page_content}" for d in docs])
                 sources_list = list(set([d.metadata.get('source', 'Unknown') for d in docs]))
                 
             structured_query = f"Context:\n{context}\n\nQuestion: {q}"
+            sys_prompt = RESEARCH_PROMPT if is_deep_research else STRICT_TINYLLAMA_PROMPT
             
-            final_resp = llm.invoke([
-                SystemMessage(content=STRICT_TINYLLAMA_PROMPT), 
-                HumanMessage(content=structured_query)
-            ]).content
+            final_resp = llm.invoke([SystemMessage(content=sys_prompt), HumanMessage(content=structured_query)]).content
             
             citations = ", ".join(sources_list) if sources_list else "None"
             self.safe_insert(f"\n{final_resp}\n\n[Verified Sources: {citations}]\n---\n")
