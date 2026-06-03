@@ -13,8 +13,9 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 45.0
+CURRENT_VERSION = 45.2
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
+APP_CORE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/app_core.py"
 
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
@@ -47,7 +48,6 @@ STUDIO_PROMPTS = {
 # PRE-BOOT THEME LOADER
 # ==========================================
 def load_initial_theme():
-    """Loads appearance settings before the UI classes initialize to prevent visual glitching."""
     theme_mode = "Dark"
     accent_color = "blue"
     if os.path.exists(SAVE_FILE):
@@ -64,7 +64,7 @@ def load_initial_theme():
 _theme, _accent = load_initial_theme()
 
 # ==========================================
-# UI COMPONENTS: ANIMATIONS & MODALS
+# UI COMPONENTS: ANIMATIONS, TOASTS & MODALS
 # ==========================================
 class BouncySplash(ctk.CTkToplevel):
     def __init__(self, master):
@@ -85,7 +85,7 @@ class BouncySplash(ctk.CTkToplevel):
         
         self.canvas.create_text(300, 130, text="Source Agent", font=("Segoe UI", 48, "bold"), fill="#ffffff")
         
-        splashes = ["100% Offline!", "Air-Gapped!", "Now with Streaming!", "TinyLlama Powered!", "Pixel Perfect!"]
+        splashes = ["100% Offline!", "Air-Gapped!", "Now with OTA Updates!", "TinyLlama Powered!", "Pixel Perfect!"]
         self.splash_id = self.canvas.create_text(450, 180, text=random.choice(splashes), font=("Segoe UI", 16, "bold", "italic"), fill="#facc15")
         self.status_id = self.canvas.create_text(300, 260, text="Initializing core...", font=("Segoe UI", 12), fill="#94a3b8")
 
@@ -106,19 +106,34 @@ class BouncySplash(ctk.CTkToplevel):
         self.running = False; self.destroy()
 
 class NotificationToast(ctk.CTkFrame):
-    def __init__(self, parent, title, message, color="#f59e0b"):
+    """Upgraded Interactive Toast with Action Button support"""
+    def __init__(self, parent, title, message, color="#f59e0b", action_text=None, action_cmd=None):
         super().__init__(parent, fg_color="#1e293b", border_width=2, border_color=color, corner_radius=8)
         self.parent = parent
+        
         ctk.CTkLabel(self, text=title, font=("Segoe UI", 14, "bold"), text_color=color).pack(anchor="w", padx=15, pady=(10, 0))
         ctk.CTkLabel(self, text=message, font=("Segoe UI", 12), justify="left", wraplength=300).pack(anchor="w", padx=15, pady=(0, 10))
+        
+        if action_text and action_cmd:
+            self.btn = ctk.CTkButton(self, text=action_text, font=("Segoe UI", 12, "bold"), fg_color=color, hover_color="#fbbf24", text_color="#020617", height=30, command=lambda: self.execute_action(action_cmd))
+            self.btn.pack(anchor="w", padx=15, pady=(0, 15))
+            self.stay_open = True # Keep open until clicked
+        else:
+            self.stay_open = False
+        
         self.place(relx=0.5, rely=-0.2, anchor="n")
         self.animate_in(0)
+        
+    def execute_action(self, cmd):
+        cmd()
+        self.animate_out(0)
         
     def animate_in(self, step):
         if step < 20:
             self.place(relx=0.5, rely=-0.2 + (step * 0.012), anchor="n")
             self.after(15, lambda: self.animate_in(step + 1))
-        else: self.after(6000, self.animate_out, 0)
+        else:
+            if not self.stay_open: self.after(6000, self.animate_out, 0)
             
     def animate_out(self, step):
         if step < 20:
@@ -126,9 +141,69 @@ class NotificationToast(ctk.CTkFrame):
             self.after(15, lambda: self.animate_out(step + 1))
         else: self.destroy()
 
-# ==========================================
-# NEW: SUPPORT PORTAL
-# ==========================================
+class OTAUpdateModal(ctk.CTkToplevel):
+    """Displays Release Notes and handles the Hot-Swapping Update"""
+    def __init__(self, master, new_version, changelog):
+        super().__init__(master)
+        self.title("Software Update")
+        self.geometry("500x400")
+        self.attributes("-topmost", True)
+        self.master_app = master
+        
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - 250
+        y = (self.winfo_screenheight() // 2) - 200
+        self.geometry(f"+{x}+{y}")
+        
+        ctk.CTkLabel(self, text=f"Update V{new_version} Available", font=("Segoe UI", 24, "bold"), text_color="#f59e0b").pack(pady=(20, 5))
+        ctk.CTkLabel(self, text="Release Notes & Changelog:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=30, pady=(10, 0))
+        
+        self.notes = ctk.CTkTextbox(self, width=440, height=180, font=("Segoe UI", 13), fg_color="#1e293b")
+        self.notes.pack(padx=30, pady=5)
+        self.notes.insert("1.0", changelog)
+        self.notes.configure(state="disabled")
+        
+        self.pb = ctk.CTkProgressBar(self, mode="indeterminate", width=440, progress_color="#10b981")
+        
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        self.btn_frame.pack(fill="x", padx=30, pady=20)
+        
+        self.btn_cancel = ctk.CTkButton(self.btn_frame, text="Later", fg_color="#475569", width=100, command=self.destroy)
+        self.btn_cancel.pack(side="left")
+        
+        self.btn_update = ctk.CTkButton(self.btn_frame, text="Apply Update & Restart", font=("Segoe UI", 13, "bold"), fg_color="#10b981", hover_color="#059669", command=self.execute_update)
+        self.btn_update.pack(side="right")
+
+    def execute_update(self):
+        self.btn_cancel.configure(state="disabled")
+        self.btn_update.configure(state="disabled", text="Downloading...")
+        self.pb.pack(before=self.btn_frame, pady=(0, 10))
+        self.pb.start()
+        threading.Thread(target=self._download_and_replace, daemon=True).start()
+
+    def _download_and_replace(self):
+        try:
+            # 1. Download the new script
+            req = urllib.request.Request(APP_CORE_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                new_code = r.read().decode('utf-8')
+                
+            # 2. Overwrite the current running file
+            current_file = os.path.abspath(__file__)
+            with open(current_file, "w", encoding="utf-8") as f:
+                f.write(new_code)
+                
+            self.after(0, lambda: self.btn_update.configure(text="Restarting App..."))
+            time.sleep(1)
+            
+            # 3. Hard Reboot the Process
+            os.execv(sys.executable, ['python', current_file])
+            
+        except Exception as e:
+            self.after(0, self.pb.stop)
+            self.after(0, lambda: messagebox.showerror("Update Failed", f"Could not download update: {e}"))
+            self.after(0, self.destroy)
+
 class ContactDeveloperWindow(ctk.CTkToplevel):
     def __init__(self, master):
         super().__init__(master)
@@ -136,7 +211,6 @@ class ContactDeveloperWindow(ctk.CTkToplevel):
         self.geometry("500x550")
         self.attributes("-topmost", True)
         
-        # Center Window
         self.update_idletasks()
         x = (self.winfo_screenwidth() // 2) - 250
         y = (self.winfo_screenheight() // 2) - 275
@@ -161,7 +235,6 @@ class ContactDeveloperWindow(ctk.CTkToplevel):
     def process_send(self):
         email = self.email_entry.get().strip()
         msg = self.msg_box.get("1.0", "end-1c").strip()
-        
         if not email or "@" not in email:
             messagebox.showerror("Validation Error", "Please provide a valid return email address.")
             return
@@ -172,15 +245,10 @@ class ContactDeveloperWindow(ctk.CTkToplevel):
         self.send_btn.configure(state="disabled", text="Encrypting & Routing...")
         self.pb.pack(before=self.send_btn, pady=(0, 15))
         self.pb.start()
-        
         threading.Thread(target=self._simulate_network_dispatch, args=(email, msg), daemon=True).start()
 
     def _simulate_network_dispatch(self, email, msg):
-        # NOTE FOR KAIDEN: This is where you put your Formspree/SendGrid API POST request in the future.
-        # requests.post("https://formspree.io/f/YOUR_ID", json={"email": email, "message": msg})
-        
-        time.sleep(2.5) # Simulate network transit time
-        
+        time.sleep(2.5) 
         self.after(0, self.pb.stop)
         self.after(0, self.pb.forget)
         self.after(0, lambda: messagebox.showinfo("Transmission Successful", "Your message has been securely routed to the developer. We will be in touch shortly!"))
@@ -199,17 +267,19 @@ class SourceAgentMaster(ctk.CTk):
         self.theme_mode = _theme
         self.accent_color = _accent
         
+        self.load_settings() 
         self.withdraw() 
         self.splash = BouncySplash(self)
-        self.after(100, self.check_environment)
+        
+        self.after(100, lambda: threading.Thread(target=self._threaded_env_check, daemon=True).start())
 
-    def check_environment(self):
+    def _threaded_env_check(self):
         try:
             startupinfo = subprocess.STARTUPINFO() if os.name == 'nt' else None
             if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             subprocess.run(["ollama", "--version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
         except:
-            self.splash.set_status("Downloading Engine...", "#f59e0b")
+            self.after(0, lambda: self.splash.set_status("Downloading Engine...", "#f59e0b"))
             threading.Thread(target=self.download_and_install_ollama, daemon=True).start()
             return
 
@@ -218,22 +288,33 @@ class SourceAgentMaster(ctk.CTk):
             if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True, startupinfo=startupinfo)
             if self.ai_model not in result.stdout:
-                self.splash.set_status("Pulling Neural Core...", "#f59e0b")
+                self.after(0, lambda: self.splash.set_status(f"Pulling Neural Core ({self.ai_model})...", "#f59e0b"))
                 threading.Thread(target=self.pull_tinyllama, daemon=True).start()
                 return
         except: pass
 
-        self.finish_boot()
+        self.after(0, self.finish_boot)
+
+    def load_settings(self):
+        if os.path.exists(SAVE_FILE):
+            try:
+                with open(SAVE_FILE, "r") as f:
+                    d = json.load(f)
+                    saved_model = d.get("ai_model", "tinyllama")
+                    if "gemini" in saved_model or "claude" in saved_model or "/" in saved_model:
+                        self.ai_model = "tinyllama"
+                    else: self.ai_model = saved_model
+            except: pass
 
     def download_and_install_ollama(self):
         installer_path = os.path.join(BASE_DIR, "OllamaSetup.exe")
         try:
             urllib.request.urlretrieve(OLLAMA_INSTALLER_URL, installer_path)
-            self.splash.set_status("Check your Taskbar!", "#10b981")
+            self.after(0, lambda: self.splash.set_status("Check your Taskbar!", "#10b981"))
             subprocess.run([installer_path], check=True)
             if os.path.exists(installer_path): os.remove(installer_path)
             time.sleep(1)
-            self.after(0, self.check_environment)
+            threading.Thread(target=self._threaded_env_check, daemon=True).start()
         except Exception as e:
             self.after(0, lambda: messagebox.showerror("Setup Failed", f"Could not auto-install Ollama: {e}"))
             self.after(0, lambda: sys.exit(1))
@@ -242,10 +323,10 @@ class SourceAgentMaster(ctk.CTk):
         try:
             startupinfo = subprocess.STARTUPINFO() if os.name == 'nt' else None
             if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            subprocess.run(["ollama", "pull", "tinyllama"], check=True, startupinfo=startupinfo)
+            subprocess.run(["ollama", "pull", self.ai_model], check=True, startupinfo=startupinfo)
             self.after(0, self.finish_boot)
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Download Failed", f"Ollama failed to pull tinyllama: {e}"))
+            self.after(0, lambda: messagebox.showerror("Download Failed", f"Ollama failed to pull {self.ai_model}: {e}"))
             self.after(0, lambda: sys.exit(1))
 
     def finish_boot(self):
@@ -260,25 +341,30 @@ class SourceAgentMaster(ctk.CTk):
         self.deiconify()
         threading.Thread(target=self.sentinel_update_check, daemon=True).start()
 
-    def sentinel_update_check(self):
-        while True:
-            try:
-                req = urllib.request.Request(VERSION_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
-                with urllib.request.urlopen(req, timeout=5) as r:
-                    data = json.loads(r.read().decode('utf-8'))
-                    cloud_version = float(data.get('app_version', CURRENT_VERSION))
-                    if cloud_version > CURRENT_VERSION:
-                        msg = f"Version {cloud_version} is available! Save your work and restart the application to apply the update automatically."
-                        self.after(0, lambda: NotificationToast(self, "System Update Available", msg, color="#f59e0b"))
-                        break 
-            except: pass
-            time.sleep(300) 
+    def sentinel_update_check(self, manual=False):
+        """Silently polls GitHub for updates. If manual=True, shows alert if up-to-date."""
+        try:
+            req = urllib.request.Request(VERSION_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                data = json.loads(r.read().decode('utf-8'))
+                cloud_version = float(data.get('app_version', CURRENT_VERSION))
+                changelog = data.get('changelog', "Bug fixes and performance improvements.")
+                
+                if cloud_version > CURRENT_VERSION:
+                    msg = f"Version {cloud_version} is available. Click below to review the changes and apply the Over-The-Air hotfix."
+                    self.after(0, lambda: NotificationToast(self, "System Update Found", msg, color="#f59e0b", action_text="Review Update", action_cmd=lambda: OTAUpdateModal(self, cloud_version, changelog)))
+                    return # Stop polling loop
+                elif manual:
+                    self.after(0, lambda: messagebox.showinfo("Up to Date", f"You are currently running the latest version (V{CURRENT_VERSION})."))
+        except Exception as e: 
+            if manual: self.after(0, lambda: messagebox.showerror("Network Error", f"Could not reach the update server: {e}"))
+        
+        if not manual:
+            self.after(300000, lambda: threading.Thread(target=self.sentinel_update_check, daemon=True).start())
 
     def setup_ui(self):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
         
-        # --- SIDEBAR PANEL ---
-        # The background color dynamically respects the current theme
         sidebar_color = "#020617" if self.theme_mode == "Dark" else "#f1f5f9"
         text_primary = "white" if self.theme_mode == "Dark" else "black"
         
@@ -288,20 +374,17 @@ class SourceAgentMaster(ctk.CTk):
         ctk.CTkLabel(s, text="🔒 100% Offline Air-Gapped Mode", font=("Segoe UI", 11), text_color="#10b981").pack(pady=(0, 25))
         
         ctk.CTkButton(s, text="📂 Ingest PDF Sources", font=("Segoe UI", 14, "bold"), height=45, command=self.add_docs).pack(fill="x", padx=20, pady=(10, 15))
-        
         ctk.CTkLabel(s, text="📚 Ingested Sources:", font=("Segoe UI", 13, "bold"), text_color="#94a3b8").pack(anchor="w", padx=20, pady=(10, 5))
         
         self.sources_scroll = ctk.CTkScrollableFrame(s, height=250)
         self.sources_scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
 
-        # Bottom Tools
         bottom_tools = ctk.CTkFrame(s, fg_color="transparent")
         bottom_tools.pack(side="bottom", fill="x", pady=20)
         
         ctk.CTkButton(bottom_tools, text="⚙️ Workspace Settings", font=("Segoe UI", 13), fg_color="#475569", hover_color="#334155", command=self.open_settings).pack(fill="x", padx=20, pady=5)
         ctk.CTkButton(bottom_tools, text="✉️ Contact Developer", font=("Segoe UI", 13), fg_color="#f59e0b", hover_color="#d97706", text_color="white", command=lambda: ContactDeveloperWindow(self)).pack(fill="x", padx=20, pady=5)
 
-        # --- MAIN TABBED ENGINE ---
         self.tabview = ctk.CTkTabview(self)
         self.tabview.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
         
@@ -358,7 +441,7 @@ class SourceAgentMaster(ctk.CTk):
         self.chat.tag_config("source", foreground="#facc15")
         self.chat.tag_config("error", foreground="#ef4444")
         
-        self.chat.insert("1.0", "SYSTEM: TinyLlama compute core activated. Ready for inquiry.\n\n")
+        self.chat.insert("1.0", f"SYSTEM: {self.ai_model.capitalize()} compute core activated. Ready for inquiry.\n\n")
         self.chat.configure(state="disabled")
         
         input_frame = ctk.CTkFrame(self.tab_chat, fg_color="transparent")
@@ -532,7 +615,7 @@ class SourceAgentMaster(ctk.CTk):
     def open_settings(self):
         win = ctk.CTkToplevel(self)
         win.title("Workspace Settings")
-        win.geometry("500x350")
+        win.geometry("500x400")
         win.attributes("-topmost", True)
         
         tabs = ctk.CTkTabview(win)
@@ -547,17 +630,17 @@ class SourceAgentMaster(ctk.CTk):
         color_menu = ctk.CTkOptionMenu(tab_look, values=["blue", "green", "dark-blue"], width=400)
         color_menu.set(self.accent_color); color_menu.pack()
 
+        tab_system = tabs.add("System Updates")
+        ctk.CTkLabel(tab_system, text=f"Current Build: V{CURRENT_VERSION}", font=("Segoe UI", 12, "bold")).pack(pady=(20,10))
+        ctk.CTkButton(tab_system, text="Check for Updates via GitHub", fg_color="#f59e0b", hover_color="#d97706", text_color="#020617", command=lambda: threading.Thread(target=self.sentinel_update_check, args=(True,), daemon=True).start()).pack(pady=10)
+
         def apply_changes():
             self.theme_mode = theme_menu.get()
             self.accent_color = color_menu.get()
-            
             ctk.set_appearance_mode(self.theme_mode)
             
             with open(SAVE_FILE, "w") as f: 
-                json.dump({
-                    "theme_mode": self.theme_mode,
-                    "accent_color": self.accent_color
-                }, f)
+                json.dump({"theme_mode": self.theme_mode, "accent_color": self.accent_color, "ai_model": self.ai_model}, f)
             win.destroy()
             
         ctk.CTkButton(win, text="Save Workspace Preferences", font=("Segoe UI", 14, "bold"), height=45, command=apply_changes).pack(pady=(0, 20), padx=20, fill="x")
