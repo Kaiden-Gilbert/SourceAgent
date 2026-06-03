@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader, CSVLoader
 
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 46.0
+CURRENT_VERSION = 46.1
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
 APP_CORE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/app_core.py"
 
@@ -50,17 +50,13 @@ STUDIO_PROMPTS = {
 # DEPENDENCY CHECKER & THEME LOADER
 # ==========================================
 def ensure_dependencies():
-    """Silently ensures multi-modal loaders are installed before boot."""
-    try:
-        import docx2txt
-    except ImportError:
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "docx2txt", "-q"])
+    try: import docx2txt
+    except ImportError: subprocess.check_call([sys.executable, "-m", "pip", "install", "docx2txt", "-q"])
 
 ensure_dependencies()
 
 def load_initial_theme():
-    theme_mode = "Dark"
-    accent_color = "blue"
+    theme_mode = "Dark"; accent_color = "blue"
     if os.path.exists(SAVE_FILE):
         try:
             with open(SAVE_FILE, "r") as f:
@@ -96,7 +92,7 @@ class BouncySplash(ctk.CTkToplevel):
         
         self.canvas.create_text(300, 130, text="Source Agent", font=("Segoe UI", 48, "bold"), fill="#ffffff")
         
-        splashes = ["100% Offline!", "Air-Gapped!", "Now with Multi-Modal Ingestion!", "Omni-Reader Active!", "Pixel Perfect!"]
+        splashes = ["100% Offline!", "Air-Gapped!", "Now with Multi-Modal Ingestion!", "Omni-Reader Active!", "V46.1.0 Deployed!"]
         self.splash_id = self.canvas.create_text(450, 180, text=random.choice(splashes), font=("Segoe UI", 16, "bold", "italic"), fill="#facc15")
         self.status_id = self.canvas.create_text(300, 260, text="Initializing Omni-Reader...", font=("Segoe UI", 12), fill="#94a3b8")
 
@@ -128,15 +124,12 @@ class NotificationToast(ctk.CTkFrame):
             self.btn = ctk.CTkButton(self, text=action_text, font=("Segoe UI", 12, "bold"), fg_color=color, hover_color="#fbbf24", text_color="#020617", height=30, command=lambda: self.execute_action(action_cmd))
             self.btn.pack(anchor="w", padx=15, pady=(0, 15))
             self.stay_open = True
-        else:
-            self.stay_open = False
+        else: self.stay_open = False
         
-        self.place(relx=0.5, rely=-0.2, anchor="n")
-        self.animate_in(0)
+        self.place(relx=0.5, rely=-0.2, anchor="n"); self.animate_in(0)
         
     def execute_action(self, cmd):
-        cmd()
-        self.animate_out(0)
+        cmd(); self.animate_out(0)
         
     def animate_in(self, step):
         if step < 20:
@@ -159,54 +152,37 @@ class OTAUpdateModal(ctk.CTkToplevel):
         self.attributes("-topmost", True)
         self.master_app = master
         
-        self.update_idletasks()
-        x = (self.winfo_screenwidth() // 2) - 250
-        y = (self.winfo_screenheight() // 2) - 200
+        self.update_idletasks(); x = (self.winfo_screenwidth() // 2) - 250; y = (self.winfo_screenheight() // 2) - 200
         self.geometry(f"+{x}+{y}")
         
         ctk.CTkLabel(self, text=f"Update V{new_version} Available", font=("Segoe UI", 24, "bold"), text_color="#f59e0b").pack(pady=(20, 5))
         ctk.CTkLabel(self, text="Release Notes & Changelog:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=30, pady=(10, 0))
         
         self.notes = ctk.CTkTextbox(self, width=440, height=180, font=("Segoe UI", 13), fg_color="#1e293b")
-        self.notes.pack(padx=30, pady=5)
-        self.notes.insert("1.0", changelog)
-        self.notes.configure(state="disabled")
+        self.notes.pack(padx=30, pady=5); self.notes.insert("1.0", changelog); self.notes.configure(state="disabled")
         
         self.pb = ctk.CTkProgressBar(self, mode="indeterminate", width=440, progress_color="#10b981")
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent"); self.btn_frame.pack(fill="x", padx=30, pady=20)
         
-        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.btn_frame.pack(fill="x", padx=30, pady=20)
-        
-        self.btn_cancel = ctk.CTkButton(self.btn_frame, text="Later", fg_color="#475569", width=100, command=self.destroy)
-        self.btn_cancel.pack(side="left")
-        
+        self.btn_cancel = ctk.CTkButton(self.btn_frame, text="Later", fg_color="#475569", width=100, command=self.destroy); self.btn_cancel.pack(side="left")
         self.btn_update = ctk.CTkButton(self.btn_frame, text="Apply Update & Restart", font=("Segoe UI", 13, "bold"), fg_color="#10b981", hover_color="#059669", command=self.execute_update)
         self.btn_update.pack(side="right")
 
     def execute_update(self):
-        self.btn_cancel.configure(state="disabled")
-        self.btn_update.configure(state="disabled", text="Downloading...")
-        self.pb.pack(before=self.btn_frame, pady=(0, 10))
-        self.pb.start()
+        self.btn_cancel.configure(state="disabled"); self.btn_update.configure(state="disabled", text="Downloading...")
+        self.pb.pack(before=self.btn_frame, pady=(0, 10)); self.pb.start()
         threading.Thread(target=self._download_and_replace, daemon=True).start()
 
     def _download_and_replace(self):
         try:
             req = urllib.request.Request(APP_CORE_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
-            with urllib.request.urlopen(req, timeout=15) as r:
-                new_code = r.read().decode('utf-8')
-                
+            with urllib.request.urlopen(req, timeout=15) as r: new_code = r.read().decode('utf-8')
             current_file = os.path.abspath(__file__)
-            with open(current_file, "w", encoding="utf-8") as f:
-                f.write(new_code)
-                
-            self.after(0, lambda: self.btn_update.configure(text="Restarting App..."))
-            time.sleep(1)
+            with open(current_file, "w", encoding="utf-8") as f: f.write(new_code)
+            self.after(0, lambda: self.btn_update.configure(text="Restarting App...")); time.sleep(1)
             os.execv(sys.executable, ['python', current_file])
         except Exception as e:
-            self.after(0, self.pb.stop)
-            self.after(0, lambda: messagebox.showerror("Update Failed", f"Could not download update: {e}"))
-            self.after(0, self.destroy)
+            self.after(0, self.pb.stop); self.after(0, lambda: messagebox.showerror("Update Failed", f"Could not download update: {e}")); self.after(0, self.destroy)
 
 class ContactDeveloperWindow(ctk.CTkToplevel):
     def __init__(self, master):
@@ -215,46 +191,36 @@ class ContactDeveloperWindow(ctk.CTkToplevel):
         self.geometry("500x550")
         self.attributes("-topmost", True)
         
-        self.update_idletasks()
-        x = (self.winfo_screenwidth() // 2) - 250
-        y = (self.winfo_screenheight() // 2) - 275
+        self.update_idletasks(); x = (self.winfo_screenwidth() // 2) - 250; y = (self.winfo_screenheight() // 2) - 275
         self.geometry(f"+{x}+{y}")
         
         ctk.CTkLabel(self, text="✉️ Direct Support", font=("Segoe UI", 24, "bold")).pack(pady=(25, 5))
         ctk.CTkLabel(self, text="Send a message directly to Kaiden Gilbert.", font=("Segoe UI", 12), text_color="#94a3b8").pack(pady=(0, 20))
         
         ctk.CTkLabel(self, text="Your Email Address:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=40)
-        self.email_entry = ctk.CTkEntry(self, width=420, height=40, placeholder_text="name@company.com")
-        self.email_entry.pack(padx=40, pady=(5, 15))
+        self.email_entry = ctk.CTkEntry(self, width=420, height=40, placeholder_text="name@company.com"); self.email_entry.pack(padx=40, pady=(5, 15))
         
         ctk.CTkLabel(self, text="Message / Bug Report:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=40)
-        self.msg_box = ctk.CTkTextbox(self, width=420, height=200, font=("Segoe UI", 14))
-        self.msg_box.pack(padx=40, pady=(5, 20))
+        self.msg_box = ctk.CTkTextbox(self, width=420, height=200, font=("Segoe UI", 14)); self.msg_box.pack(padx=40, pady=(5, 20))
         
         self.pb = ctk.CTkProgressBar(self, mode="indeterminate", width=420)
-        
         self.send_btn = ctk.CTkButton(self, text="Transmit Message", font=("Segoe UI", 14, "bold"), height=45, width=420, command=self.process_send)
         self.send_btn.pack(padx=40, pady=(0, 20))
 
     def process_send(self):
-        email = self.email_entry.get().strip()
-        msg = self.msg_box.get("1.0", "end-1c").strip()
+        email = self.email_entry.get().strip(); msg = self.msg_box.get("1.0", "end-1c").strip()
         if not email or "@" not in email:
-            messagebox.showerror("Validation Error", "Please provide a valid return email address.")
-            return
+            messagebox.showerror("Validation Error", "Please provide a valid return email address."); return
         if len(msg) < 10:
-            messagebox.showerror("Validation Error", "Please provide a bit more detail in your message.")
-            return
+            messagebox.showerror("Validation Error", "Please provide a bit more detail in your message."); return
             
         self.send_btn.configure(state="disabled", text="Encrypting & Routing...")
-        self.pb.pack(before=self.send_btn, pady=(0, 15))
-        self.pb.start()
+        self.pb.pack(before=self.send_btn, pady=(0, 15)); self.pb.start()
         threading.Thread(target=self._simulate_network_dispatch, args=(email, msg), daemon=True).start()
 
     def _simulate_network_dispatch(self, email, msg):
         time.sleep(2.5) 
-        self.after(0, self.pb.stop)
-        self.after(0, self.pb.forget)
+        self.after(0, self.pb.stop); self.after(0, self.pb.forget)
         self.after(0, lambda: messagebox.showinfo("Transmission Successful", "Your message has been securely routed to the developer. We will be in touch shortly!"))
         self.after(0, self.destroy)
 
@@ -264,7 +230,7 @@ class ContactDeveloperWindow(ctk.CTkToplevel):
 class SourceAgentMaster(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"Source Agent | Enterprise Workspace V{CURRENT_VERSION}")
+        self.title(f"Source Agent | Enterprise Workspace V46.1.0")
         self.geometry("1280x850")
         
         self.ai_model = "tinyllama"
@@ -317,11 +283,9 @@ class SourceAgentMaster(ctk.CTk):
             self.after(0, lambda: self.splash.set_status("Check your Taskbar!", "#10b981"))
             subprocess.run([installer_path], check=True)
             if os.path.exists(installer_path): os.remove(installer_path)
-            time.sleep(1)
-            threading.Thread(target=self._threaded_env_check, daemon=True).start()
+            time.sleep(1); threading.Thread(target=self._threaded_env_check, daemon=True).start()
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Setup Failed", f"Could not auto-install Ollama: {e}"))
-            self.after(0, lambda: sys.exit(1))
+            self.after(0, lambda: messagebox.showerror("Setup Failed", f"Could not auto-install Ollama: {e}")); self.after(0, lambda: sys.exit(1))
 
     def pull_tinyllama(self):
         try:
@@ -330,8 +294,7 @@ class SourceAgentMaster(ctk.CTk):
             subprocess.run(["ollama", "pull", self.ai_model], check=True, startupinfo=startupinfo)
             self.after(0, self.finish_boot)
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Download Failed", f"Ollama failed to pull {self.ai_model}: {e}"))
-            self.after(0, lambda: sys.exit(1))
+            self.after(0, lambda: messagebox.showerror("Download Failed", f"Ollama failed to pull {self.ai_model}: {e}")); self.after(0, lambda: sys.exit(1))
 
     def finish_boot(self):
         self.splash.set_status("Connecting to Vault...", "#10b981")
@@ -341,8 +304,7 @@ class SourceAgentMaster(ctk.CTk):
         self.load_db()
         self.refresh_source_list()
         
-        self.splash.close()
-        self.deiconify()
+        self.splash.close(); self.deiconify()
         threading.Thread(target=self.sentinel_update_check, daemon=True).start()
 
     def sentinel_update_check(self, manual=False):
@@ -362,8 +324,7 @@ class SourceAgentMaster(ctk.CTk):
         except Exception as e: 
             if manual: self.after(0, lambda: messagebox.showerror("Network Error", f"Could not reach the update server: {e}"))
         
-        if not manual:
-            self.after(300000, lambda: threading.Thread(target=self.sentinel_update_check, daemon=True).start())
+        if not manual: self.after(300000, lambda: threading.Thread(target=self.sentinel_update_check, daemon=True).start())
 
     def setup_ui(self):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
@@ -373,13 +334,20 @@ class SourceAgentMaster(ctk.CTk):
         
         s = ctk.CTkFrame(self, width=280, fg_color=sidebar_color, corner_radius=0)
         s.grid(row=0, column=0, sticky="nsew")
-        ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 24, "bold"), text_color=text_primary).pack(pady=(30, 10))
-        ctk.CTkLabel(s, text="🔒 100% Offline Air-Gapped Mode", font=("Segoe UI", 11), text_color="#10b981").pack(pady=(0, 25))
+        ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 24, "bold"), text_color=text_primary).pack(pady=(30, 5))
+        ctk.CTkLabel(s, text="🔒 100% Offline Air-Gapped Mode", font=("Segoe UI", 11), text_color="#10b981").pack(pady=(0, 20))
         
-        ctk.CTkButton(s, text="📂 Ingest Source Files", font=("Segoe UI", 14, "bold"), height=45, command=self.add_docs).pack(fill="x", padx=20, pady=(10, 15))
-        ctk.CTkLabel(s, text="📚 Ingested Sources:", font=("Segoe UI", 13, "bold"), text_color="#94a3b8").pack(anchor="w", padx=20, pady=(10, 5))
+        # --- NEW: Action Grid Layout ---
+        doc_actions = ctk.CTkFrame(s, fg_color="transparent")
+        doc_actions.pack(fill="x", padx=20, pady=(10, 15))
+        doc_actions.grid_columnconfigure(0, weight=1); doc_actions.grid_columnconfigure(1, weight=1)
         
-        self.sources_scroll = ctk.CTkScrollableFrame(s, height=250)
+        ctk.CTkButton(doc_actions, text="📂 Ingest", font=("Segoe UI", 13, "bold"), height=40, fg_color="#0ea5e9", hover_color="#0284c7", command=self.add_docs).grid(row=0, column=0, padx=(0, 5), sticky="ew")
+        ctk.CTkButton(doc_actions, text="🧹 Clear All", font=("Segoe UI", 13, "bold"), height=40, fg_color="#ef4444", hover_color="#dc2626", command=self.clear_all_sources).grid(row=0, column=1, padx=(5, 0), sticky="ew")
+        
+        ctk.CTkLabel(s, text="📚 Ingested Sources:", font=("Segoe UI", 13, "bold"), text_color="#94a3b8").pack(anchor="w", padx=20, pady=(5, 5))
+        
+        self.sources_scroll = ctk.CTkScrollableFrame(s, height=250, fg_color="#0f172a" if self.theme_mode=="Dark" else "#e2e8f0")
         self.sources_scroll.pack(fill="both", expand=True, padx=20, pady=(0, 15))
 
         bottom_tools = ctk.CTkFrame(s, fg_color="transparent")
@@ -402,19 +370,41 @@ class SourceAgentMaster(ctk.CTk):
     def refresh_source_list(self):
         for widget in self.sources_scroll.winfo_children(): widget.destroy()
         try:
-            # Update to look for all supported file types
             valid_exts = (".pdf", ".txt", ".docx", ".csv")
             files = [f for f in os.listdir(SOURCE_DIR) if f.lower().endswith(valid_exts)]
             if not files:
-                ctk.CTkLabel(self.sources_scroll, text="No sources ingested.", font=("Segoe UI", 12, "italic"), text_color="#64748b").pack(pady=15)
+                ctk.CTkLabel(self.sources_scroll, text="Vault is empty.", font=("Segoe UI", 12, "italic"), text_color="#64748b").pack(pady=15)
                 return
             for f in files:
                 row = ctk.CTkFrame(self.sources_scroll, fg_color="transparent")
-                row.pack(fill="x", pady=3)
-                display_name = f if len(f) <= 22 else f[:19] + "..."
+                row.pack(fill="x", pady=4)
+                display_name = f if len(f) <= 18 else f[:15] + "..."
                 ctk.CTkLabel(row, text=display_name, font=("Segoe UI", 12), anchor="w").pack(side="left", fill="x", expand=True, padx=(5, 5))
-                ctk.CTkButton(row, text="✕", width=24, height=24, fg_color="#ef4444", hover_color="#dc2626", text_color="white", font=("Segoe UI", 11, "bold"), command=lambda filename=f: self.delete_source(filename)).pack(side="right", padx=5)
+                ctk.CTkButton(row, text="✕", width=26, height=26, fg_color="#ef4444", hover_color="#dc2626", text_color="white", font=("Segoe UI", 11, "bold"), command=lambda filename=f: self.delete_source(filename)).pack(side="right", padx=5)
         except Exception as e: print(f"Error drawing source UI: {e}")
+
+    def clear_all_sources(self):
+        """NUCLEAR OPTION: Purges the entire vault instantly."""
+        if not [f for f in os.listdir(SOURCE_DIR) if os.path.isfile(os.path.join(SOURCE_DIR, f))]:
+            messagebox.showinfo("Vault Empty", "There are no files to delete.")
+            return
+            
+        if messagebox.askyesno("Purge Vault", "WARNING: This will permanently delete ALL ingested documents and wipe the AI's memory matrix. Are you sure you want to continue?"):
+            try:
+                for f in os.listdir(SOURCE_DIR):
+                    file_path = os.path.join(SOURCE_DIR, f)
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                
+                index_path = os.path.join(SOURCE_DIR, "faiss_index")
+                if os.path.exists(index_path):
+                    shutil.rmtree(index_path)
+                
+                self.db = None
+                self.refresh_source_list()
+                messagebox.showinfo("Purge Complete", "The vault has been completely wiped. Memory matrix reset.")
+            except Exception as e:
+                messagebox.showerror("IO Error", f"Failed to purge vault: {e}")
 
     def delete_source(self, filename):
         if messagebox.askyesno("Confirm Removal", f"Are you sure you want to erase '{filename}'?"):
