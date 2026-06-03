@@ -1,4 +1,4 @@
-import os, sys, threading, shutil, json, time, urllib.request, subprocess, math, random
+import os, sys, threading, shutil, json, time, urllib.request, subprocess, math, random, webbrowser
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -15,9 +15,9 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader, CSVLoader
 
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 46.1
+CURRENT_VERSION = 46.11 # Represents V46.1.1 logically for float comparisons
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
-APP_CORE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/app_core.py"
+REPO_URL = "https://github.com/Kaiden-Gilbert/SourceAgent"
 
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
 SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
@@ -92,7 +92,7 @@ class BouncySplash(ctk.CTkToplevel):
         
         self.canvas.create_text(300, 130, text="Source Agent", font=("Segoe UI", 48, "bold"), fill="#ffffff")
         
-        splashes = ["100% Offline!", "Air-Gapped!", "Now with Multi-Modal Ingestion!", "Omni-Reader Active!", "V46.1.0 Deployed!"]
+        splashes = ["100% Offline!", "Air-Gapped!", "Now with Multi-Modal Ingestion!", "Omni-Reader Active!", "V46.1.1 Deployed!"]
         self.splash_id = self.canvas.create_text(450, 180, text=random.choice(splashes), font=("Segoe UI", 16, "bold", "italic"), fill="#facc15")
         self.status_id = self.canvas.create_text(300, 260, text="Initializing Omni-Reader...", font=("Segoe UI", 12), fill="#94a3b8")
 
@@ -144,45 +144,34 @@ class NotificationToast(ctk.CTkFrame):
             self.after(15, lambda: self.animate_out(step + 1))
         else: self.destroy()
 
-class OTAUpdateModal(ctk.CTkToplevel):
+class UpdateAdvisoryModal(ctk.CTkToplevel):
     def __init__(self, master, new_version, changelog):
         super().__init__(master)
-        self.title("Software Update")
-        self.geometry("500x400")
+        self.title("Software Update Advisory")
+        self.geometry("500x380")
         self.attributes("-topmost", True)
-        self.master_app = master
         
-        self.update_idletasks(); x = (self.winfo_screenwidth() // 2) - 250; y = (self.winfo_screenheight() // 2) - 200
+        self.update_idletasks(); x = (self.winfo_screenwidth() // 2) - 250; y = (self.winfo_screenheight() // 2) - 190
         self.geometry(f"+{x}+{y}")
         
-        ctk.CTkLabel(self, text=f"Update V{new_version} Available", font=("Segoe UI", 24, "bold"), text_color="#f59e0b").pack(pady=(20, 5))
+        # Determine logical version string for display
+        display_version = "46.1.1" if new_version == 46.11 else str(new_version)
+        
+        ctk.CTkLabel(self, text=f"Update V{display_version} Available", font=("Segoe UI", 24, "bold"), text_color="#f59e0b").pack(pady=(20, 5))
         ctk.CTkLabel(self, text="Release Notes & Changelog:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=30, pady=(10, 0))
         
-        self.notes = ctk.CTkTextbox(self, width=440, height=180, font=("Segoe UI", 13), fg_color="#1e293b")
+        self.notes = ctk.CTkTextbox(self, width=440, height=160, font=("Segoe UI", 13), fg_color="#1e293b")
         self.notes.pack(padx=30, pady=5); self.notes.insert("1.0", changelog); self.notes.configure(state="disabled")
         
-        self.pb = ctk.CTkProgressBar(self, mode="indeterminate", width=440, progress_color="#10b981")
-        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent"); self.btn_frame.pack(fill="x", padx=30, pady=20)
+        self.btn_frame = ctk.CTkFrame(self, fg_color="transparent"); self.btn_frame.pack(fill="x", padx=30, pady=15)
         
-        self.btn_cancel = ctk.CTkButton(self.btn_frame, text="Later", fg_color="#475569", width=100, command=self.destroy); self.btn_cancel.pack(side="left")
-        self.btn_update = ctk.CTkButton(self.btn_frame, text="Apply Update & Restart", font=("Segoe UI", 13, "bold"), fg_color="#10b981", hover_color="#059669", command=self.execute_update)
-        self.btn_update.pack(side="right")
+        self.btn_cancel = ctk.CTkButton(self.btn_frame, text="Dismiss", fg_color="#475569", width=100, command=self.destroy); self.btn_cancel.pack(side="left")
+        self.btn_github = ctk.CTkButton(self.btn_frame, text="View on GitHub", font=("Segoe UI", 13, "bold"), fg_color="#10b981", hover_color="#059669", command=self.open_repo)
+        self.btn_github.pack(side="right")
 
-    def execute_update(self):
-        self.btn_cancel.configure(state="disabled"); self.btn_update.configure(state="disabled", text="Downloading...")
-        self.pb.pack(before=self.btn_frame, pady=(0, 10)); self.pb.start()
-        threading.Thread(target=self._download_and_replace, daemon=True).start()
-
-    def _download_and_replace(self):
-        try:
-            req = urllib.request.Request(APP_CORE_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
-            with urllib.request.urlopen(req, timeout=15) as r: new_code = r.read().decode('utf-8')
-            current_file = os.path.abspath(__file__)
-            with open(current_file, "w", encoding="utf-8") as f: f.write(new_code)
-            self.after(0, lambda: self.btn_update.configure(text="Restarting App...")); time.sleep(1)
-            os.execv(sys.executable, ['python', current_file])
-        except Exception as e:
-            self.after(0, self.pb.stop); self.after(0, lambda: messagebox.showerror("Update Failed", f"Could not download update: {e}")); self.after(0, self.destroy)
+    def open_repo(self):
+        webbrowser.open(REPO_URL)
+        self.destroy()
 
 class ContactDeveloperWindow(ctk.CTkToplevel):
     def __init__(self, master):
@@ -230,7 +219,7 @@ class ContactDeveloperWindow(ctk.CTkToplevel):
 class SourceAgentMaster(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title(f"Source Agent | Enterprise Workspace V46.1.0")
+        self.title("Source Agent | Enterprise Workspace V46.1.1")
         self.geometry("1280x850")
         
         self.ai_model = "tinyllama"
@@ -316,11 +305,11 @@ class SourceAgentMaster(ctk.CTk):
                 changelog = data.get('changelog', "Bug fixes and performance improvements.")
                 
                 if cloud_version > CURRENT_VERSION:
-                    msg = f"Version {cloud_version} is available. Click below to review the changes and apply the Over-The-Air hotfix."
-                    self.after(0, lambda: NotificationToast(self, "System Update Found", msg, color="#f59e0b", action_text="Review Update", action_cmd=lambda: OTAUpdateModal(self, cloud_version, changelog)))
+                    msg = "A new update is available for Source Agent. Click below to review the release notes."
+                    self.after(0, lambda: NotificationToast(self, "Update Alert", msg, color="#f59e0b", action_text="Review Update", action_cmd=lambda: UpdateAdvisoryModal(self, cloud_version, changelog)))
                     return 
                 elif manual:
-                    self.after(0, lambda: messagebox.showinfo("Up to Date", f"You are currently running the latest version (V{CURRENT_VERSION})."))
+                    self.after(0, lambda: messagebox.showinfo("Up to Date", f"You are currently running the latest version (V46.1.1)."))
         except Exception as e: 
             if manual: self.after(0, lambda: messagebox.showerror("Network Error", f"Could not reach the update server: {e}"))
         
@@ -337,7 +326,6 @@ class SourceAgentMaster(ctk.CTk):
         ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 24, "bold"), text_color=text_primary).pack(pady=(30, 5))
         ctk.CTkLabel(s, text="🔒 100% Offline Air-Gapped Mode", font=("Segoe UI", 11), text_color="#10b981").pack(pady=(0, 20))
         
-        # --- NEW: Action Grid Layout ---
         doc_actions = ctk.CTkFrame(s, fg_color="transparent")
         doc_actions.pack(fill="x", padx=20, pady=(10, 15))
         doc_actions.grid_columnconfigure(0, weight=1); doc_actions.grid_columnconfigure(1, weight=1)
@@ -384,7 +372,6 @@ class SourceAgentMaster(ctk.CTk):
         except Exception as e: print(f"Error drawing source UI: {e}")
 
     def clear_all_sources(self):
-        """NUCLEAR OPTION: Purges the entire vault instantly."""
         if not [f for f in os.listdir(SOURCE_DIR) if os.path.isfile(os.path.join(SOURCE_DIR, f))]:
             messagebox.showinfo("Vault Empty", "There are no files to delete.")
             return
@@ -627,8 +614,8 @@ class SourceAgentMaster(ctk.CTk):
         color_menu.set(self.accent_color); color_menu.pack()
 
         tab_system = tabs.add("System Updates")
-        ctk.CTkLabel(tab_system, text=f"Current Build: V{CURRENT_VERSION}", font=("Segoe UI", 12, "bold")).pack(pady=(20,10))
-        ctk.CTkButton(tab_system, text="Check for Updates via GitHub", fg_color="#f59e0b", hover_color="#d97706", text_color="#020617", command=lambda: threading.Thread(target=self.sentinel_update_check, args=(True,), daemon=True).start()).pack(pady=10)
+        ctk.CTkLabel(tab_system, text=f"Current Build: V46.1.1", font=("Segoe UI", 12, "bold")).pack(pady=(20,10))
+        ctk.CTkButton(tab_system, text="Check for Updates", fg_color="#f59e0b", hover_color="#d97706", text_color="#020617", command=lambda: threading.Thread(target=self.sentinel_update_check, args=(True,), daemon=True).start()).pack(pady=10)
 
         def apply_changes():
             self.theme_mode = theme_menu.get()
@@ -681,16 +668,11 @@ class SourceAgentMaster(ctk.CTk):
             file_path = os.path.join(SOURCE_DIR, f)
             ext = f.lower().split('.')[-1]
             try:
-                if ext == "pdf":
-                    docs.extend(PyMuPDFLoader(file_path).load())
-                elif ext == "txt":
-                    docs.extend(TextLoader(file_path, encoding="utf-8").load())
-                elif ext == "docx":
-                    docs.extend(Docx2txtLoader(file_path).load())
-                elif ext == "csv":
-                    docs.extend(CSVLoader(file_path).load())
-            except Exception as e:
-                print(f"Error loading {f}: {e}")
+                if ext == "pdf": docs.extend(PyMuPDFLoader(file_path).load())
+                elif ext == "txt": docs.extend(TextLoader(file_path, encoding="utf-8").load())
+                elif ext == "docx": docs.extend(Docx2txtLoader(file_path).load())
+                elif ext == "csv": docs.extend(CSVLoader(file_path).load())
+            except Exception as e: print(f"Error loading {f}: {e}")
                 
         if docs:
             splitter = RecursiveCharacterTextSplitter(chunk_size=700, chunk_overlap=150)
