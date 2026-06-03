@@ -14,7 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader, CSVLoader
 
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 48.0 
+CURRENT_VERSION = 48.1 
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
 REPO_URL = "https://github.com/Kaiden-Gilbert/SourceAgent"
 APP_CORE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/app_core.py"
@@ -28,16 +28,22 @@ os.makedirs(SOURCE_DIR, exist_ok=True)
 
 OLLAMA_INSTALLER_URL = "https://ollama.com/download/OllamaSetup.exe"
 
-# --- SYSTEM PROMPTS ---
-STRICT_TINYLLAMA_PROMPT = """You are a strict reading assistant.
-You must ONLY use the provided facts inside the Context section below.
-If the answer is not directly stated in the Context, say exactly: "I cannot find this information in the provided sources."
-Do not make up facts. Do not use outside knowledge. Stick strictly to the text."""
+# --- THE UI QUEUE (ANTI-CRASH SYSTEM) ---
+# This prevents background threads from crashing Tkinter by flooding it with updates.
+ui_queue = queue.Queue()
+
+# --- UPGRADED CONVERSATIONAL PROMPTS ---
+STRICT_TINYLLAMA_PROMPT = """You are Source Agent, a highly professional AI reading assistant.
+Follow these rules strictly:
+1. If the user only says a greeting (like 'hey', 'hi', or 'hello'), reply warmly and ask them what document they want to investigate. Do NOT generate document revisions for greetings.
+2. Otherwise, you must ONLY use the provided facts inside the Context section below.
+3. If the answer is not directly stated in the Context, say exactly: "I cannot find this information in the provided sources."
+Do not make up facts. Do not use outside knowledge."""
 
 RESEARCH_PROMPT = """You are an Enterprise Research Analyst. 
 Conduct a Deep Research synthesis on the provided context. 
-1. Identify all core concepts related to the query.
-2. Compare evidence across multiple sources.
+1. If the user only says hello, reply warmly and ask what they want to research.
+2. Otherwise, identify all core concepts related to the query.
 3. Generate a highly detailed, structured Executive Report.
 4. Ensure every factual claim is strictly grounded in the text."""
 
@@ -53,14 +59,13 @@ STUDIO_PROMPTS = {
 def ensure_dependencies():
     packages = ["docx2txt", "pyttsx3"]
     if os.name == 'nt':
-        packages.append("pywin32") # Required for background SAPI5 TTS
+        packages.append("pywin32")
     for pkg in packages:
         try: __import__(pkg)
         except ImportError: subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "-q"])
 
 ensure_dependencies()
 
-# The dedicated Audio Queue to prevent Windows COM Threading crashes
 audio_queue = queue.Queue()
 
 def tts_worker_loop():
@@ -74,14 +79,13 @@ def tts_worker_loop():
         while True:
             text = audio_queue.get()
             if text is None: break
-            # Scrub markdown before speaking
             clean_text = re.sub(r'[*#]', '', text)
             clean_text = re.sub(r'\[Verified Sources:.*?\]', '', clean_text)
             engine.say(clean_text)
             engine.runAndWait()
             audio_queue.task_done()
     except Exception as e:
-        print(f"Audio Engine Initialization Fault: {e}")
+        print(f"Audio Engine Fault: {e}")
 
 threading.Thread(target=tts_worker_loop, daemon=True).start()
 
@@ -122,7 +126,7 @@ class BouncySplash(ctk.CTkToplevel):
         
         self.canvas.create_text(300, 130, text="Source Agent", font=("Segoe UI", 48, "bold"), fill="#ffffff")
         
-        splashes = ["100% Offline!", "Audio Mode Fixed!", "Seamless Recovery Active!", "Omni-Reader Active!", "V48 Deployed!"]
+        splashes = ["100% Offline!", "Audio Mode Fixed!", "Anti-Crash Protocol Active!", "Omni-Reader Active!", "V48.1 Deployed!"]
         self.splash_id = self.canvas.create_text(450, 180, text=random.choice(splashes), font=("Segoe UI", 16, "bold", "italic"), fill="#facc15")
         self.status_id = self.canvas.create_text(300, 260, text="Initializing Architecture...", font=("Segoe UI", 12), fill="#94a3b8")
 
@@ -202,9 +206,7 @@ class OTAUpdateModal(ctk.CTkToplevel):
         self.btn_cancel.configure(state="disabled"); self.btn_update.configure(state="disabled", text="Hot-Swapping Code...")
         self.pb.pack(before=self.btn_frame, pady=(0, 10)); self.pb.start()
         
-        # Save the workspace state BEFORE restarting
         self.master_app.save_workspace_state()
-        
         threading.Thread(target=self._download_and_replace, daemon=True).start()
 
     def _download_and_replace(self):
@@ -276,6 +278,22 @@ class SourceAgentMaster(ctk.CTk):
         self.splash = BouncySplash(self)
         
         self.after(100, lambda: threading.Thread(target=self._threaded_env_check, daemon=True).start())
+        self.process_ui_queue() # Start the anti-crash polling loop
+
+    def process_ui_queue(self):
+        """Drains the global thread-safe queue and updates the UI. Prevents Tkinter crashes."""
+        try:
+            while True:
+                msg_type, target, text, tag = ui_queue.get_nowait()
+                if msg_type == "insert":
+                    target.configure(state="normal")
+                    if tag: target.insert("end", text, tag)
+                    else: target.insert("end", text)
+                    target.see("end")
+                    target.configure(state="disabled")
+        except queue.Empty:
+            pass
+        self.after(50, self.process_ui_queue)
 
     def _threaded_env_check(self):
         try:
@@ -337,7 +355,6 @@ class SourceAgentMaster(ctk.CTk):
         self.load_db()
         self.refresh_source_list()
         
-        # Check for Workspace Recovery state
         self.restore_workspace_state()
         
         self.splash.close(); self.deiconify()
@@ -364,7 +381,6 @@ class SourceAgentMaster(ctk.CTk):
 
     # --- STATE PERSISTENCE ENGINE ---
     def save_workspace_state(self):
-        """Dumps current UI context to disk so an update reboot is seamless."""
         try:
             state = {
                 "chat_content": self.chat.get("1.0", "end-1c"),
@@ -375,22 +391,13 @@ class SourceAgentMaster(ctk.CTk):
         except Exception as e: print(f"State Save Error: {e}")
 
     def restore_workspace_state(self):
-        """Reloads UI context if a recovery file exists, then deletes the file."""
         if os.path.exists(RECOVERY_FILE):
             try:
-                with open(RECOVERY_FILE, "r") as f:
-                    state = json.load(f)
-                    
+                with open(RECOVERY_FILE, "r") as f: state = json.load(f)
                 if state.get("chat_content"):
-                    self.chat.configure(state="normal")
-                    self.chat.delete("1.0", "end")
-                    self.chat.insert("1.0", state["chat_content"])
-                    self.chat.configure(state="disabled")
-                    
+                    self.chat.configure(state="normal"); self.chat.delete("1.0", "end"); self.chat.insert("1.0", state["chat_content"]); self.chat.configure(state="disabled")
                 if state.get("studio_content"):
-                    self.studio_box.delete("1.0", "end")
-                    self.studio_box.insert("1.0", state["studio_content"])
-                    
+                    self.studio_box.delete("1.0", "end"); self.studio_box.insert("1.0", state["studio_content"])
                 os.remove(RECOVERY_FILE)
             except Exception as e: print(f"State Restore Error: {e}")
 
@@ -522,13 +529,8 @@ class SourceAgentMaster(ctk.CTk):
         ctk.CTkButton(input_frame, text="Query Core", width=120, height=50, font=("Segoe UI", 14, "bold"), command=self.send_chat).grid(row=0, column=2)
 
     def safe_insert_tagged(self, target, text, tag=None):
-        def _update():
-            target.configure(state="normal")
-            if tag: target.insert("end", text, tag)
-            else: target.insert("end", text)
-            target.see("end")
-            target.configure(state="disabled")
-        self.after(0, _update)
+        """Thread-safe UI update routing through the Queue system"""
+        ui_queue.put(("insert", target, text, tag))
 
     def send_chat(self):
         q = self.entry.get().strip(); 
