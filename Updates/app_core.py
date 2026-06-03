@@ -1,4 +1,4 @@
-import os, sys, threading, shutil, json, time, urllib.request, subprocess
+import os, sys, threading, shutil, json, time, urllib.request, subprocess, math
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -13,7 +13,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 42.0
+CURRENT_VERSION = 43.0
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
 
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
@@ -44,15 +44,61 @@ STUDIO_PROMPTS = {
 }
 
 # ==========================================
-# UI COMPONENTS: TOAST & PROVISIONER
+# UI COMPONENTS: BOOT ANIMATION & TOAST
 # ==========================================
+class BouncySplash(ctk.CTkToplevel):
+    """Custom Boot-Up Animation Screen"""
+    def __init__(self, master, text="Waking up the AI..."):
+        super().__init__(master)
+        self.title("Booting")
+        self.geometry("600x200")
+        self.overrideredirect(True) # Borderless window
+        self.attributes("-topmost", True)
+        self.configure(fg_color="#020617")
+        
+        # Center the splash screen
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - 300
+        y = (self.winfo_screenheight() // 2) - 100
+        self.geometry(f"+{x}+{y}")
+        
+        self.canvas = tk.Canvas(self, width=600, height=200, bg="#020617", highlightthickness=0)
+        self.canvas.pack(fill="both", expand=True)
+        
+        self.chars = []
+        self.time_step = 0
+        self.running = True
+        
+        self.set_text(text)
+        self.animate()
+
+    def set_text(self, new_text, color="#3b82f6"):
+        self.canvas.delete("all")
+        self.chars = []
+        start_x = 300 - (len(new_text) * 8)
+        for i, char in enumerate(new_text):
+            char_id = self.canvas.create_text(start_x + (i * 18), 100, text=char, font=("Segoe UI", 26, "bold"), fill=color)
+            self.chars.append((char_id, start_x + (i * 18)))
+
+    def animate(self):
+        if not self.running: return
+        self.time_step += 0.15
+        for i, (char_id, base_x) in enumerate(self.chars):
+            # Mathematical sine wave for the bouncy effect
+            y_offset = math.sin(self.time_step + (i * 0.3)) * 12
+            self.canvas.coords(char_id, base_x, 100 + y_offset)
+        self.after(30, self.animate)
+        
+    def close(self):
+        self.running = False
+        self.destroy()
+
 class NotificationToast(ctk.CTkFrame):
     def __init__(self, parent, title, message, color="#f59e0b"):
         super().__init__(parent, fg_color="#1e293b", border_width=2, border_color=color, corner_radius=8)
         self.parent = parent
         ctk.CTkLabel(self, text=title, font=("Segoe UI", 14, "bold"), text_color=color).pack(anchor="w", padx=15, pady=(10, 0))
         ctk.CTkLabel(self, text=message, font=("Segoe UI", 12), justify="left", wraplength=300).pack(anchor="w", padx=15, pady=(0, 10))
-        
         self.place(relx=0.5, rely=-0.2, anchor="n")
         self.animate_in(0)
         
@@ -68,57 +114,6 @@ class NotificationToast(ctk.CTkFrame):
             self.after(15, lambda: self.animate_out(step + 1))
         else: self.destroy()
 
-class ProvisionerWindow(ctk.CTkToplevel):
-    def __init__(self, master, mode="install"):
-        super().__init__(master)
-        self.title("System Provisioner")
-        self.geometry("500x250")
-        self.attributes("-topmost", True)
-        self.protocol("WM_DELETE_WINDOW", self.disable_close)
-        
-        self.mode = mode
-        self.master_app = master
-        
-        self.lbl = ctk.CTkLabel(self, text="Initializing Local AI Engine...", font=("Segoe UI", 18, "bold"))
-        self.lbl.pack(pady=(40, 20))
-        self.pb = ctk.CTkProgressBar(self, mode="indeterminate", width=400); self.pb.pack(); self.pb.start()
-        self.sub_lbl = ctk.CTkLabel(self, text="Please wait. Preparing environment...", font=("Segoe UI", 12), text_color="#94a3b8")
-        self.sub_lbl.pack(pady=10)
-        
-        if self.mode == "install": threading.Thread(target=self.download_and_install_ollama, daemon=True).start()
-        elif self.mode == "pull": threading.Thread(target=self.pull_tinyllama, daemon=True).start()
-
-    def disable_close(self): pass
-
-    def download_and_install_ollama(self):
-        self.after(0, lambda: self.lbl.configure(text="Downloading Ollama Engine..."))
-        installer_path = os.path.join(BASE_DIR, "OllamaSetup.exe")
-        try:
-            urllib.request.urlretrieve(OLLAMA_INSTALLER_URL, installer_path)
-            self.after(0, lambda: self.lbl.configure(text="Installing Engine (Check Taskbar)..."))
-            self.after(0, lambda: self.sub_lbl.configure(text="Please finish the setup wizard that popped up on your screen."))
-            subprocess.run([installer_path], check=True)
-            if os.path.exists(installer_path): os.remove(installer_path)
-            self.after(0, lambda: self.lbl.configure(text="Installation Finished!"))
-            time.sleep(2)
-            self.after(0, self.destroy); self.after(0, self.master_app.check_environment)
-        except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Setup Failed", f"Could not auto-install Ollama: {e}\nPlease run it manually from ollama.com"))
-            self.after(0, lambda: sys.exit(1))
-
-    def pull_tinyllama(self):
-        self.after(0, lambda: self.lbl.configure(text="Pulling TinyLlama Core..."))
-        self.after(0, lambda: self.sub_lbl.configure(text="Downloading model parameters (~650MB)."))
-        try:
-            startupinfo = subprocess.STARTUPINFO() if os.name == 'nt' else None
-            if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-            subprocess.run(["ollama", "pull", "tinyllama"], check=True, startupinfo=startupinfo)
-            self.after(0, self.destroy); self.after(0, self.master_app.finish_boot)
-        except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Download Failed", f"Ollama failed to pull tinyllama: {e}"))
-            self.after(0, lambda: sys.exit(1))
-
-
 # ==========================================
 # MAIN APPLICATION ENGINE
 # ==========================================
@@ -130,7 +125,12 @@ class SourceAgentMaster(ctk.CTk):
         ctk.set_appearance_mode("Dark")
         
         self.ai_model = "tinyllama"
-        self.withdraw()
+        self.withdraw() # Hide main window during boot
+        
+        # Launch the bouncy splash screen immediately
+        self.splash = BouncySplash(self, "Waking up the AI...")
+        
+        # Give the UI 100ms to render the splash before blocking the background with checks
         self.after(100, self.check_environment)
 
     def check_environment(self):
@@ -139,7 +139,8 @@ class SourceAgentMaster(ctk.CTk):
             if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             subprocess.run(["ollama", "--version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
         except:
-            ProvisionerWindow(self, mode="install")
+            self.splash.set_text("Downloading Engine...", "#f59e0b")
+            threading.Thread(target=self.download_and_install_ollama, daemon=True).start()
             return
 
         try:
@@ -147,19 +148,48 @@ class SourceAgentMaster(ctk.CTk):
             if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True, startupinfo=startupinfo)
             if self.ai_model not in result.stdout:
-                ProvisionerWindow(self, mode="pull")
+                self.splash.set_text("Pulling Neural Core...", "#f59e0b")
+                threading.Thread(target=self.pull_tinyllama, daemon=True).start()
                 return
         except: pass
 
         self.finish_boot()
 
+    def download_and_install_ollama(self):
+        installer_path = os.path.join(BASE_DIR, "OllamaSetup.exe")
+        try:
+            urllib.request.urlretrieve(OLLAMA_INSTALLER_URL, installer_path)
+            self.splash.set_text("Check your Taskbar!", "#10b981")
+            subprocess.run([installer_path], check=True)
+            if os.path.exists(installer_path): os.remove(installer_path)
+            time.sleep(1)
+            self.after(0, self.check_environment)
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("Setup Failed", f"Could not auto-install Ollama: {e}"))
+            self.after(0, lambda: sys.exit(1))
+
+    def pull_tinyllama(self):
+        try:
+            startupinfo = subprocess.STARTUPINFO() if os.name == 'nt' else None
+            if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            subprocess.run(["ollama", "pull", "tinyllama"], check=True, startupinfo=startupinfo)
+            self.after(0, self.finish_boot)
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("Download Failed", f"Ollama failed to pull tinyllama: {e}"))
+            self.after(0, lambda: sys.exit(1))
+
     def finish_boot(self):
+        self.splash.set_text("Connecting to Vault...", "#10b981")
         self.setup_ui()
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         self.db = None
         self.load_db()
         self.refresh_source_list()
+        
+        # Kill splash and show main window
+        self.splash.close()
         self.deiconify()
+        
         threading.Thread(target=self.sentinel_update_check, daemon=True).start()
 
     def sentinel_update_check(self):
@@ -192,10 +222,8 @@ class SourceAgentMaster(ctk.CTk):
 
         ctk.CTkButton(s, text="📂 Ingest PDF Sources", font=("Segoe UI", 14, "bold"), height=45, fg_color="#0ea5e9", hover_color="#0284c7", command=self.add_docs).pack(fill="x", padx=20, pady=(20, 15))
         
-        # Ingested Sources Section Label
         ctk.CTkLabel(s, text="📚 Ingested Sources:", font=("Segoe UI", 13, "bold"), text_color="#94a3b8").pack(anchor="w", padx=20, pady=(10, 5))
         
-        # Scrollable panel for viewing and removing sources
         self.sources_scroll = ctk.CTkScrollableFrame(s, fg_color="#0f172a", height=320)
         self.sources_scroll.pack(fill="both", expand=True, padx=20, pady=(0, 25))
 
@@ -212,44 +240,29 @@ class SourceAgentMaster(ctk.CTk):
         self.build_analytics_tab()
 
     def refresh_source_list(self):
-        """Wipes and repopulates the active file explorer frame in the sidebar."""
-        for widget in self.sources_scroll.winfo_children():
-            widget.destroy()
-            
+        for widget in self.sources_scroll.winfo_children(): widget.destroy()
         try:
             files = [f for f in os.listdir(SOURCE_DIR) if f.endswith(".pdf")]
             if not files:
-                lbl = ctk.CTkLabel(self.sources_scroll, text="No sources ingested.", font=("Segoe UI", 12, "italic"), text_color="#64748b")
-                lbl.pack(pady=15)
+                ctk.CTkLabel(self.sources_scroll, text="No sources ingested.", font=("Segoe UI", 12, "italic"), text_color="#64748b").pack(pady=15)
                 return
-                
             for f in files:
                 row = ctk.CTkFrame(self.sources_scroll, fg_color="transparent")
                 row.pack(fill="x", pady=3)
-                
-                # Truncate string gracefully if the filename overflows the sidebar layout bounding box
                 display_name = f if len(f) <= 22 else f[:19] + "..."
-                lbl = ctk.CTkLabel(row, text=display_name, font=("Segoe UI", 12), anchor="w")
-                lbl.pack(side="left", fill="x", expand=True, padx=(5, 5))
-                
-                btn = ctk.CTkButton(row, text="✕", width=24, height=24, fg_color="#ef4444", hover_color="#dc2626", text_color="white", font=("Segoe UI", 11, "bold"), command=lambda filename=f: self.delete_source(filename))
-                btn.pack(side="right", padx=5)
-        except Exception as e:
-            print(f"Error drawing source UI: {e}")
+                ctk.CTkLabel(row, text=display_name, font=("Segoe UI", 12), anchor="w").pack(side="left", fill="x", expand=True, padx=(5, 5))
+                ctk.CTkButton(row, text="✕", width=24, height=24, fg_color="#ef4444", hover_color="#dc2626", text_color="white", font=("Segoe UI", 11, "bold"), command=lambda filename=f: self.delete_source(filename)).pack(side="right", padx=5)
+        except Exception as e: print(f"Error drawing source UI: {e}")
 
     def delete_source(self, filename):
-        """Deletes a source file permanently from disk and initiates an autonomous vector hot-rebuild."""
         if messagebox.askyesno("Confirm Removal", f"Are you sure you want to completely erase '{filename}' from the knowledge architecture?"):
             try:
                 file_path = os.path.join(SOURCE_DIR, filename)
-                if os.path.exists(file_path):
-                    os.remove(file_path)
+                if os.path.exists(file_path): os.remove(file_path)
                 
-                remaining_pdfs = [f for f in os.listdir(SOURCE_DIR) if f.endswith(".pdf")]
-                if not remaining_pdfs:
+                if not [f for f in os.listdir(SOURCE_DIR) if f.endswith(".pdf")]:
                     index_path = os.path.join(SOURCE_DIR, "faiss_index")
-                    if os.path.exists(index_path):
-                        shutil.rmtree(index_path)
+                    if os.path.exists(index_path): shutil.rmtree(index_path)
                     self.db = None
                     self.refresh_source_list()
                     messagebox.showinfo("Sources Cleared", "All source documentation has been wiped clean. Database reset complete.")
@@ -261,13 +274,20 @@ class SourceAgentMaster(ctk.CTk):
                 messagebox.showerror("IO Fault", f"Failed to prune document resource: {e}")
 
     # ------------------------------------------
-    # TAB 1: AGENTIC CHAT
+    # TAB 1: AGENTIC CHAT (NOW WITH STREAMING & TAGS)
     # ------------------------------------------
     def build_chat_tab(self):
         self.tab_chat.grid_columnconfigure(0, weight=1); self.tab_chat.grid_rowconfigure(0, weight=1)
         
         self.chat = ctk.CTkTextbox(self.tab_chat, font=("Segoe UI", 15), fg_color="#1e293b", spacing1=8, spacing3=8)
         self.chat.grid(row=0, column=0, sticky="nsew", pady=(10, 20))
+        
+        # UI Tags for beautiful chat formatting
+        self.chat.tag_config("user", foreground="#3b82f6", font=("Segoe UI", 15, "bold"))
+        self.chat.tag_config("agent", foreground="#10b981", font=("Segoe UI", 15, "bold"))
+        self.chat.tag_config("source", foreground="#f59e0b", font=("Segoe UI", 13, "italic"))
+        self.chat.tag_config("error", foreground="#ef4444", font=("Segoe UI", 15, "bold"))
+        
         self.chat.insert("1.0", "SYSTEM: TinyLlama compute core activated. Ready for inquiry.\n\n")
         self.chat.configure(state="disabled")
         
@@ -283,6 +303,18 @@ class SourceAgentMaster(ctk.CTk):
         ctk.CTkSwitch(input_frame, text="Deep Research", variable=self.research_var, font=("Segoe UI", 12, "bold")).grid(row=0, column=1, padx=(0, 10))
         ctk.CTkButton(input_frame, text="Query Core", width=120, height=50, fg_color="#3b82f6", font=("Segoe UI", 14, "bold"), command=self.send_chat).grid(row=0, column=2)
 
+    def safe_insert_tagged(self, target, text, tag=None):
+        """Thread-safe UI updater that applies font and color tags."""
+        def _update():
+            target.configure(state="normal")
+            if tag:
+                target.insert("end", text, tag)
+            else:
+                target.insert("end", text)
+            target.see("end")
+            target.configure(state="disabled")
+        self.after(0, _update)
+
     def send_chat(self):
         q = self.entry.get().strip(); 
         if not q: return
@@ -290,7 +322,11 @@ class SourceAgentMaster(ctk.CTk):
         threading.Thread(target=self.engine_chat, args=(q,), daemon=True).start()
 
     def engine_chat(self, q):
-        self.after(0, lambda: self.safe_insert(self.chat, f"\nUSER: {q}\nAGENT: Inquiring localized text embeddings...\n"))
+        # Format the user query nicely
+        self.safe_insert_tagged(self.chat, f"\nUSER: ", "user")
+        self.safe_insert_tagged(self.chat, f"{q}\n")
+        self.safe_insert_tagged(self.chat, f"AGENT: ", "agent")
+        
         is_deep_research = self.research_var.get()
         
         try:
@@ -306,19 +342,24 @@ class SourceAgentMaster(ctk.CTk):
             structured_query = f"Context:\n{context}\n\nQuestion: {q}"
             sys_prompt = RESEARCH_PROMPT if is_deep_research else STRICT_TINYLLAMA_PROMPT
             
-            final_resp = llm.invoke([SystemMessage(content=sys_prompt), HumanMessage(content=structured_query)]).content
-            citations = ", ".join(sources_list) if sources_list else "None"
+            # --- THE STREAMING UPGRADE ---
+            stream = llm.stream([SystemMessage(content=sys_prompt), HumanMessage(content=structured_query)])
+            for chunk in stream:
+                # Instantly pipe each word to the UI as it is generated
+                self.safe_insert_tagged(self.chat, chunk.content)
             
-            self.after(0, lambda: self.safe_insert(self.chat, f"\n{final_resp}\n\n[Verified Sources: {citations}]\n---\n"))
+            citations = ", ".join(sources_list) if sources_list else "None"
+            self.safe_insert_tagged(self.chat, f"\n\n[Verified Sources: {citations}]\n---\n", "source")
+            
             self.log_audit(q, "Success", sources_list)
             self.after(0, self.refresh_analytics)
             
         except Exception as e: 
-            self.after(0, lambda: self.safe_insert(self.chat, f"\nExecution Warning: {e}\n\n---\n"))
+            self.safe_insert_tagged(self.chat, f"\n[Execution Warning: Make sure Ollama is running in the background] {e}\n\n---\n", "error")
             self.log_audit(q, f"Error: {str(e)}", [])
 
     # ------------------------------------------
-    # TAB 2: NOTEBOOK STUDIO
+    # TAB 2: NOTEBOOK STUDIO (STREAMING ENABLED)
     # ------------------------------------------
     def build_studio_tab(self):
         self.tab_studio.grid_columnconfigure(0, weight=1); self.tab_studio.grid_rowconfigure(1, weight=1)
@@ -335,6 +376,9 @@ class SourceAgentMaster(ctk.CTk):
         
         self.studio_box = ctk.CTkTextbox(self.tab_studio, font=("Consolas", 14), fg_color="#1e293b", spacing1=5, spacing3=5)
         self.studio_box.grid(row=1, column=0, sticky="nsew")
+        
+        # Tags for the studio
+        self.studio_box.tag_config("title", foreground="#3b82f6", font=("Consolas", 16, "bold"))
         self.studio_box.insert("1.0", "--- NOTEBOOK STUDIO ---\nSelect a document type above and click Generate to synthesize your ingested sources into a structured report.\n")
 
     def generate_studio_doc(self):
@@ -344,7 +388,9 @@ class SourceAgentMaster(ctk.CTk):
             
         doc_type = self.doc_type_menu.get()
         self.studio_box.delete("1.0", "end")
-        self.studio_box.insert("end", f"Generating {doc_type}...\nQuerying global vector database...\nSynthesizing context, please wait...\n\n")
+        
+        # Set the title nicely
+        self.safe_insert_tagged(self.studio_box, f"# {doc_type.upper()}\nGenerated by Source Agent Studio\n\n", "title")
         
         threading.Thread(target=self._process_studio_generation, args=(doc_type,), daemon=True).start()
 
@@ -357,18 +403,16 @@ class SourceAgentMaster(ctk.CTk):
             sys_prompt = STUDIO_PROMPTS.get(doc_type, STUDIO_PROMPTS["Executive Briefing"])
             llm = ChatOllama(model=self.ai_model, temperature=0.1, base_url="http://localhost:11434")
             
-            final_resp = llm.invoke([
-                SystemMessage(content=sys_prompt), 
-                HumanMessage(content=f"Context:\n{context}\n\nTask: Generate the {doc_type}.")
-            ]).content
+            # Streaming for the studio generation
+            stream = llm.stream([SystemMessage(content=sys_prompt), HumanMessage(content=f"Context:\n{context}\n\nTask: Generate the {doc_type}.")])
+            for chunk in stream:
+                self.safe_insert_tagged(self.studio_box, chunk.content)
             
-            self.after(0, lambda: self.studio_box.delete("1.0", "end"))
-            self.after(0, lambda: self.studio_box.insert("end", f"# {doc_type.upper()}\nGenerated by Source Agent Studio\n\n{final_resp}\n"))
             self.log_audit(f"Studio Gen: {doc_type}", "Success", list(set([d.metadata.get('source', 'Unknown') for d in docs])))
             self.after(0, self.refresh_analytics)
             
         except Exception as e:
-            self.after(0, lambda: self.studio_box.insert("end", f"\n[ERROR: {str(e)}]"))
+            self.safe_insert_tagged(self.studio_box, f"\n[ERROR: {str(e)}]")
 
     def export_studio(self):
         file_path = filedialog.asksaveasfilename(defaultextension=".md", filetypes=[("Markdown", "*.md"), ("Text File", "*.txt")], title="Export Studio Document")
@@ -429,9 +473,6 @@ class SourceAgentMaster(ctk.CTk):
     # ------------------------------------------
     # UTILITIES
     # ------------------------------------------
-    def safe_insert(self, target, text):
-        target.configure(state="normal"); target.insert("end", text); target.see("end"); target.configure(state="disabled")
-
     def log_audit(self, query, status, sources):
         entry = {"timestamp": datetime.now().isoformat(), "query": query, "status": status, "sources": sources}
         try:
@@ -471,6 +512,5 @@ class SourceAgentMaster(ctk.CTk):
         self.after(0, self.refresh_source_list)
 
 if __name__ == "__main__":
-    from datetime import datetime
     app = SourceAgentMaster()
     app.mainloop()
