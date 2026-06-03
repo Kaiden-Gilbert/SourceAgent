@@ -10,14 +10,14 @@ Welcome to **Source Agent**. This application is a fully localized intelligence 
 
 ---
 
-## ✨ Core Capabilities
+## Core Capabilities
 * **Custom Knowledge Integration:** Feed the AI your specific documents to tailor its expertise exactly to your workflow.
 * **Air-Gapped Operation:** Once initialized, the core engine is capable of running entirely offline, ensuring your data never has to leave your device.
 * **Seamless Cloud Syncing:** When connected to the internet, the app silently checks for the latest feature updates and prompts you when an upgrade is ready.
 
 ---
 
-## 🔌 Connectivity & Boot Protocol
+## Connectivity & Boot Protocol
 
 Source Agent is designed for offline sovereignty, but it utilizes a smart-boot system to ensure you always have the most stable build.
 
@@ -32,9 +32,10 @@ If you boot the agent while connected to the internet, it will quickly ping the 
 
 ---
 
-## 🐛 Support & Feedback
+## Support & Feedback
 
 This project is actively maintained. If you encounter any bugs, experience unexpected behavior, or have feature recommendations to improve the agent, please reach out.
 
 **Maintainer:** Kaiden Gilbert  
+**Owner:** Kaiden Gilbert
 *Please submit all bug reports or feature requests via email or by opening an Issue in this repository.*
