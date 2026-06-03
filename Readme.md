@@ -38,4 +38,5 @@ This project is actively maintained. If you encounter any bugs, experience unexp
 
 **Maintainer:** Kaiden Gilbert  
 **Owner:** Kaiden Gilbert
+
 *Please submit all bug reports or feature requests via email or by opening an Issue in this repository.*
