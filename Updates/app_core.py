@@ -1,4 +1,4 @@
-import os, sys, threading, shutil, json, time, urllib.request, subprocess, math
+import os, sys, threading, shutil, json, time, urllib.request, subprocess, math, random
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -13,7 +13,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 43.0
+CURRENT_VERSION = 44.0
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
 
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
@@ -44,14 +44,14 @@ STUDIO_PROMPTS = {
 }
 
 # ==========================================
-# UI COMPONENTS: BOOT ANIMATION & TOAST
+# UI COMPONENTS: MINECRAFT BOOT ANIMATION
 # ==========================================
 class BouncySplash(ctk.CTkToplevel):
-    """Custom Boot-Up Animation Screen"""
-    def __init__(self, master, text="Waking up the AI..."):
+    """Minecraft-style Boot-Up Animation Screen"""
+    def __init__(self, master):
         super().__init__(master)
         self.title("Booting")
-        self.geometry("600x200")
+        self.geometry("600x300")
         self.overrideredirect(True) # Borderless window
         self.attributes("-topmost", True)
         self.configure(fg_color="#020617")
@@ -59,34 +59,42 @@ class BouncySplash(ctk.CTkToplevel):
         # Center the splash screen
         self.update_idletasks()
         x = (self.winfo_screenwidth() // 2) - 300
-        y = (self.winfo_screenheight() // 2) - 100
+        y = (self.winfo_screenheight() // 2) - 150
         self.geometry(f"+{x}+{y}")
         
-        self.canvas = tk.Canvas(self, width=600, height=200, bg="#020617", highlightthickness=0)
+        self.canvas = tk.Canvas(self, width=600, height=300, bg="#020617", highlightthickness=0)
         self.canvas.pack(fill="both", expand=True)
         
-        self.chars = []
+        # Draw Main Title
+        self.canvas.create_text(300, 130, text="Source Agent", font=("Segoe UI", 48, "bold"), fill="#ffffff")
+        
+        # Draw Minecraft-style Splash Text
+        splashes = [
+            "100% Offline!", 
+            "Air-Gapped!", 
+            "Now with Streaming!", 
+            "TinyLlama Powered!", 
+            "Zero Trust Architecture!",
+            "No Cloud Needed!"
+        ]
+        self.splash_text = random.choice(splashes)
+        self.splash_id = self.canvas.create_text(450, 180, text=self.splash_text, font=("Segoe UI", 16, "bold", "italic"), fill="#facc15")
+        
+        self.status_id = self.canvas.create_text(300, 260, text="Initializing core...", font=("Segoe UI", 12), fill="#94a3b8")
+
         self.time_step = 0
         self.running = True
-        
-        self.set_text(text)
         self.animate()
 
-    def set_text(self, new_text, color="#3b82f6"):
-        self.canvas.delete("all")
-        self.chars = []
-        start_x = 300 - (len(new_text) * 8)
-        for i, char in enumerate(new_text):
-            char_id = self.canvas.create_text(start_x + (i * 18), 100, text=char, font=("Segoe UI", 26, "bold"), fill=color)
-            self.chars.append((char_id, start_x + (i * 18)))
+    def set_status(self, text, color="#3b82f6"):
+        self.canvas.itemconfig(self.status_id, text=text, fill=color)
 
     def animate(self):
         if not self.running: return
-        self.time_step += 0.15
-        for i, (char_id, base_x) in enumerate(self.chars):
-            # Mathematical sine wave for the bouncy effect
-            y_offset = math.sin(self.time_step + (i * 0.3)) * 12
-            self.canvas.coords(char_id, base_x, 100 + y_offset)
+        self.time_step += 0.2
+        # Sine wave for the bouncy splash text
+        y_offset = math.sin(self.time_step) * 10
+        self.canvas.coords(self.splash_id, 450, 185 + y_offset)
         self.after(30, self.animate)
         
     def close(self):
@@ -125,12 +133,9 @@ class SourceAgentMaster(ctk.CTk):
         ctk.set_appearance_mode("Dark")
         
         self.ai_model = "tinyllama"
-        self.withdraw() # Hide main window during boot
+        self.withdraw() 
         
-        # Launch the bouncy splash screen immediately
-        self.splash = BouncySplash(self, "Waking up the AI...")
-        
-        # Give the UI 100ms to render the splash before blocking the background with checks
+        self.splash = BouncySplash(self)
         self.after(100, self.check_environment)
 
     def check_environment(self):
@@ -139,7 +144,7 @@ class SourceAgentMaster(ctk.CTk):
             if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             subprocess.run(["ollama", "--version"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, startupinfo=startupinfo)
         except:
-            self.splash.set_text("Downloading Engine...", "#f59e0b")
+            self.splash.set_status("Downloading Engine...", "#f59e0b")
             threading.Thread(target=self.download_and_install_ollama, daemon=True).start()
             return
 
@@ -148,7 +153,7 @@ class SourceAgentMaster(ctk.CTk):
             if startupinfo: startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             result = subprocess.run(["ollama", "list"], capture_output=True, text=True, check=True, startupinfo=startupinfo)
             if self.ai_model not in result.stdout:
-                self.splash.set_text("Pulling Neural Core...", "#f59e0b")
+                self.splash.set_status("Pulling Neural Core...", "#f59e0b")
                 threading.Thread(target=self.pull_tinyllama, daemon=True).start()
                 return
         except: pass
@@ -159,7 +164,7 @@ class SourceAgentMaster(ctk.CTk):
         installer_path = os.path.join(BASE_DIR, "OllamaSetup.exe")
         try:
             urllib.request.urlretrieve(OLLAMA_INSTALLER_URL, installer_path)
-            self.splash.set_text("Check your Taskbar!", "#10b981")
+            self.splash.set_status("Check your Taskbar!", "#10b981")
             subprocess.run([installer_path], check=True)
             if os.path.exists(installer_path): os.remove(installer_path)
             time.sleep(1)
@@ -179,14 +184,13 @@ class SourceAgentMaster(ctk.CTk):
             self.after(0, lambda: sys.exit(1))
 
     def finish_boot(self):
-        self.splash.set_text("Connecting to Vault...", "#10b981")
+        self.splash.set_status("Connecting to Vault...", "#10b981")
         self.setup_ui()
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         self.db = None
         self.load_db()
         self.refresh_source_list()
         
-        # Kill splash and show main window
         self.splash.close()
         self.deiconify()
         
@@ -274,7 +278,7 @@ class SourceAgentMaster(ctk.CTk):
                 messagebox.showerror("IO Fault", f"Failed to prune document resource: {e}")
 
     # ------------------------------------------
-    # TAB 1: AGENTIC CHAT (NOW WITH STREAMING & TAGS)
+    # TAB 1: AGENTIC CHAT
     # ------------------------------------------
     def build_chat_tab(self):
         self.tab_chat.grid_columnconfigure(0, weight=1); self.tab_chat.grid_rowconfigure(0, weight=1)
@@ -282,11 +286,11 @@ class SourceAgentMaster(ctk.CTk):
         self.chat = ctk.CTkTextbox(self.tab_chat, font=("Segoe UI", 15), fg_color="#1e293b", spacing1=8, spacing3=8)
         self.chat.grid(row=0, column=0, sticky="nsew", pady=(10, 20))
         
-        # UI Tags for beautiful chat formatting
-        self.chat.tag_config("user", foreground="#3b82f6", font=("Segoe UI", 15, "bold"))
-        self.chat.tag_config("agent", foreground="#10b981", font=("Segoe UI", 15, "bold"))
-        self.chat.tag_config("source", foreground="#f59e0b", font=("Segoe UI", 13, "italic"))
-        self.chat.tag_config("error", foreground="#ef4444", font=("Segoe UI", 15, "bold"))
+        # BUG FIX: CustomTkinter crashes if you supply a 'font' argument to tag_config. We rely purely on color now.
+        self.chat.tag_config("user", foreground="#3b82f6")
+        self.chat.tag_config("agent", foreground="#10b981")
+        self.chat.tag_config("source", foreground="#facc15")
+        self.chat.tag_config("error", foreground="#ef4444")
         
         self.chat.insert("1.0", "SYSTEM: TinyLlama compute core activated. Ready for inquiry.\n\n")
         self.chat.configure(state="disabled")
@@ -304,13 +308,10 @@ class SourceAgentMaster(ctk.CTk):
         ctk.CTkButton(input_frame, text="Query Core", width=120, height=50, fg_color="#3b82f6", font=("Segoe UI", 14, "bold"), command=self.send_chat).grid(row=0, column=2)
 
     def safe_insert_tagged(self, target, text, tag=None):
-        """Thread-safe UI updater that applies font and color tags."""
         def _update():
             target.configure(state="normal")
-            if tag:
-                target.insert("end", text, tag)
-            else:
-                target.insert("end", text)
+            if tag: target.insert("end", text, tag)
+            else: target.insert("end", text)
             target.see("end")
             target.configure(state="disabled")
         self.after(0, _update)
@@ -322,7 +323,6 @@ class SourceAgentMaster(ctk.CTk):
         threading.Thread(target=self.engine_chat, args=(q,), daemon=True).start()
 
     def engine_chat(self, q):
-        # Format the user query nicely
         self.safe_insert_tagged(self.chat, f"\nUSER: ", "user")
         self.safe_insert_tagged(self.chat, f"{q}\n")
         self.safe_insert_tagged(self.chat, f"AGENT: ", "agent")
@@ -342,10 +342,8 @@ class SourceAgentMaster(ctk.CTk):
             structured_query = f"Context:\n{context}\n\nQuestion: {q}"
             sys_prompt = RESEARCH_PROMPT if is_deep_research else STRICT_TINYLLAMA_PROMPT
             
-            # --- THE STREAMING UPGRADE ---
             stream = llm.stream([SystemMessage(content=sys_prompt), HumanMessage(content=structured_query)])
             for chunk in stream:
-                # Instantly pipe each word to the UI as it is generated
                 self.safe_insert_tagged(self.chat, chunk.content)
             
             citations = ", ".join(sources_list) if sources_list else "None"
@@ -359,7 +357,7 @@ class SourceAgentMaster(ctk.CTk):
             self.log_audit(q, f"Error: {str(e)}", [])
 
     # ------------------------------------------
-    # TAB 2: NOTEBOOK STUDIO (STREAMING ENABLED)
+    # TAB 2: NOTEBOOK STUDIO
     # ------------------------------------------
     def build_studio_tab(self):
         self.tab_studio.grid_columnconfigure(0, weight=1); self.tab_studio.grid_rowconfigure(1, weight=1)
@@ -377,8 +375,8 @@ class SourceAgentMaster(ctk.CTk):
         self.studio_box = ctk.CTkTextbox(self.tab_studio, font=("Consolas", 14), fg_color="#1e293b", spacing1=5, spacing3=5)
         self.studio_box.grid(row=1, column=0, sticky="nsew")
         
-        # Tags for the studio
-        self.studio_box.tag_config("title", foreground="#3b82f6", font=("Consolas", 16, "bold"))
+        # UI Tags for Studio
+        self.studio_box.tag_config("title", foreground="#3b82f6")
         self.studio_box.insert("1.0", "--- NOTEBOOK STUDIO ---\nSelect a document type above and click Generate to synthesize your ingested sources into a structured report.\n")
 
     def generate_studio_doc(self):
@@ -389,9 +387,7 @@ class SourceAgentMaster(ctk.CTk):
         doc_type = self.doc_type_menu.get()
         self.studio_box.delete("1.0", "end")
         
-        # Set the title nicely
         self.safe_insert_tagged(self.studio_box, f"# {doc_type.upper()}\nGenerated by Source Agent Studio\n\n", "title")
-        
         threading.Thread(target=self._process_studio_generation, args=(doc_type,), daemon=True).start()
 
     def _process_studio_generation(self, doc_type):
@@ -403,7 +399,6 @@ class SourceAgentMaster(ctk.CTk):
             sys_prompt = STUDIO_PROMPTS.get(doc_type, STUDIO_PROMPTS["Executive Briefing"])
             llm = ChatOllama(model=self.ai_model, temperature=0.1, base_url="http://localhost:11434")
             
-            # Streaming for the studio generation
             stream = llm.stream([SystemMessage(content=sys_prompt), HumanMessage(content=f"Context:\n{context}\n\nTask: Generate the {doc_type}.")])
             for chunk in stream:
                 self.safe_insert_tagged(self.studio_box, chunk.content)
