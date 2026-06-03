@@ -1,371 +1,143 @@
-import os, sys, subprocess, time, uuid, threading, json, datetime, urllib.request, math, base64
-import tkinter as tk 
+import os, sys, urllib.request, time, threading, subprocess, json
+import tkinter as tk
+from tkinter import messagebox, ttk
 
-# --- BOOTSTRAP & AUTO-INSTALLER ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-VENV_PYTHON = os.path.join(BASE_DIR, ".venv", "Scripts", "python.exe") if os.name == 'nt' else os.path.join(BASE_DIR, ".venv", "bin", "python")
+# --- SINGLE INSTANCE LOCK ---
+if os.environ.get("SA_BOOTLOADER") == "1":
+    sys.exit(0)
+os.environ["SA_BOOTLOADER"] = "1"
 
-if sys.executable.lower() != VENV_PYTHON.lower() and os.path.exists(VENV_PYTHON):
-    subprocess.Popen([VENV_PYTHON] + sys.argv)
-    sys.exit()
+APP_DIR = os.path.join(os.getenv('LOCALAPPDATA', os.getcwd()), "SourceAgentPro")
+os.makedirs(APP_DIR, exist_ok=True)
+ENGINE_FILE = os.path.join(APP_DIR, "app_core.py")
+GITHUB_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/app_core.py"
+VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
 
-# Auto-Install Video Processing Libraries if missing
-try:
-    import cv2
-except ImportError:
-    subprocess.check_call([VENV_PYTHON, "-m", "pip", "install", "opencv-python-headless", "--quiet"])
-    import cv2
-
-import shutil
-import customtkinter as ctk
-from tkinter import filedialog
-from dotenv import load_dotenv
-
-load_dotenv(os.path.join(BASE_DIR, ".env"))
-SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
-SAVE_FILE = os.path.join(BASE_DIR, "config.json")
-HISTORY_DIR = os.path.join(BASE_DIR, "chat_storage") 
-LAUNCHER_FILE = os.path.join(BASE_DIR, "launcher.py")
-
-for d in [SOURCE_DIR, HISTORY_DIR]:
-    if not os.path.exists(d): os.makedirs(d)
-
-from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.chat_message_histories import FileChatMessageHistory
-from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_core.messages import HumanMessage 
-
-# --- APP CONFIGURATION ---
-APP_VERSION = "4.9" # Omni-Vision Update
-GITHUB_RAW_BASE_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/"
-
-# --- UI SETTINGS ---
-BG_SIDEBAR = "#050508"    
-BG_SURFACE = "#0f0f1a"    
-ACCENT_PRIMARY = "#6366f1" 
-TEXT_MAIN = "#f8fafc"     
-TEXT_MUTED = "#64748b"    
-FONT_MAIN = "Segoe UI"
-
-class ChatApp(ctk.CTk):
+class Bootloader(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title(f"SourceAgent Pro v{APP_VERSION} - Omni-Vision Edition")
-        self.geometry("1300x850")
+        self.title("Source Agent Initialization")
+        self.geometry("400x160")
+        self.configure(bg="#020617")
+        self.overrideredirect(True)
         
-        self.cached_vectorstore = None
-        self.cached_docs_hash = ""
-        self.update_alert_shown = False 
-        self.attached_media_path = None # Handles both Images AND Videos
-        
-        self.load_save_data()
-        ctk.set_appearance_mode(self.app_theme)
-        self.draw_dynamic_background()
+        # Center Window
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - (400 // 2)
+        y = (self.winfo_screenheight() // 2) - (160 // 2)
+        self.geometry(f"+{x}+{y}")
 
-        if self.user_name: self.show_welcome_back_screen()
-        else: self.show_boot_screen()
+        self.lbl = tk.Label(self, text="Verifying Environment...", bg="#020617", fg="#3b82f6", font=("Segoe UI", 12, "bold"))
+        self.lbl.pack(pady=(35, 15))
 
-        self.start_cloud_heartbeat()
+        style = ttk.Style()
+        style.theme_use('default')
+        style.configure("Blue.Horizontal.TProgressbar", background='#3b82f6', thickness=4)
+        self.pb = ttk.Progressbar(self, mode='indeterminate', length=300, style="Blue.Horizontal.TProgressbar")
+        self.pb.pack()
+        self.pb.start(15)
 
-    # ==========================================
-    # 0. IN-APP UPDATE HANDOFF PROTOCOL
-    # ==========================================
-    def trigger_handoff(self):
-        self.status_indicator.configure(text="🔄 Initiating Handoff Sequence...", text_color="#2ecc71")
-        time.sleep(0.5)
-        py_exe = get_venv_python() if 'get_venv_python' in globals() else sys.executable
-        subprocess.Popen([py_exe, LAUNCHER_FILE])
-        self.destroy()
-        sys.exit()
+        self.ready_to_launch = False
+        threading.Thread(target=self.process_boot, daemon=True).start()
 
-    def show_update_banner(self, new_version):
-        banner = ctk.CTkFrame(self, fg_color="#1e1b4b", corner_radius=12, border_width=2, border_color="#6366f1")
-        banner.place(relx=0.5, rely=0.08, anchor="center")
-        ctk.CTkLabel(banner, text=f"🚀 SourceAgent v{new_version} is ready!", font=(FONT_MAIN, 14, "bold"), text_color="white").pack(side="left", padx=(20, 15), pady=15)
-        ctk.CTkButton(banner, text="Update Now", width=100, fg_color="#2ecc71", text_color="#050508", font=(FONT_MAIN, 12, "bold"), command=self.trigger_handoff).pack(side="left", padx=(0, 10))
-        ctk.CTkButton(banner, text="Later", width=60, fg_color="transparent", border_color="#64748b", border_width=1, text_color="#64748b", command=banner.destroy).pack(side="right", padx=(0, 20))
+    def update_text(self, text, color="#3b82f6"):
+        self.after(0, lambda: self.lbl.config(text=text, fg=color))
 
-    def check_for_updates(self, manual=False):
+    def process_boot(self):
+        # 1. Dependency Check
+        required = ["customtkinter", "langchain-openai", "langchain-huggingface", "langchain-community", "faiss-cpu", "pymupdf", "python-dotenv", "sentence-transformers"]
         try:
-            req = urllib.request.Request(GITHUB_RAW_BASE_URL + f"version.json?t={int(time.time())}", headers={'Cache-Control': 'no-cache, no-store'})
-            with urllib.request.urlopen(req, timeout=5) as response:
-                cloud_v = float(json.loads(response.read().decode('utf-8')).get("app_version", 0.0))
-            if cloud_v > float(APP_VERSION):
-                if manual: self.update_status_lbl.configure(text=f"Update v{cloud_v} ready!", text_color="#2ecc71")
-                self.update_alert_shown = True
-                self.after(0, lambda: self.show_update_banner(cloud_v))
-            elif manual:
-                self.update_status_lbl.configure(text="System is up to date.", text_color=TEXT_MUTED)
-        except: pass
-
-    # ==========================================
-    # 1. LIVE SYNC & NEBULA VISUALS
-    # ==========================================
-    def start_cloud_heartbeat(self):
-        self.after(5000, self.perform_background_ping)
-
-    def perform_background_ping(self):
-        if not self.update_alert_shown: threading.Thread(target=self.check_for_updates, kwargs={"manual": False}, daemon=True).start()
-        self.after(300000, self.perform_background_ping)
-
-    def draw_dynamic_background(self):
-        self.bg_canvas = tk.Canvas(self, highlightthickness=0, bg="#020205"); self.bg_canvas.place(relx=0, rely=0, relwidth=1, relheight=1)
-        self.orbs = [self.bg_canvas.create_oval(0,0,0,0, outline="", fill="#1e1b4b"), self.bg_canvas.create_oval(0,0,0,0, outline="", fill="#312e81"), self.bg_canvas.create_oval(0,0,0,0, outline="", fill="#1e1b4b")]
-        self.anim_step = 0; self.animate_bg()
-
-    def animate_bg(self):
-        w, h = self.winfo_width(), self.winfo_height()
-        if w > 100:
-            self.anim_step += 0.012
-            x1 = (math.sin(self.anim_step) * (w/3)) + (w/2); y1 = (math.cos(self.anim_step * 0.7) * (h/3)) + (h/2)
-            self.bg_canvas.coords(self.orbs[0], x1-500, y1-500, x1+500, y1+500)
-            x2 = (math.cos(self.anim_step * 1.1) * (w/4)) + (w/2); y2 = (math.sin(self.anim_step * 0.8) * (h/4)) + (h/2)
-            self.bg_canvas.coords(self.orbs[1], x2-400, y2-400, x2+400, y2+400)
-        self.bg_canvas.lower("all"); self.after(40, self.animate_bg)
-
-    # ==========================================
-    # 2. OMNI-VISION ENGINE (IMAGE + VIDEO)
-    # ==========================================
-    def attach_media(self):
-        """Allows user to select Images AND Videos"""
-        fp = filedialog.askopenfilename(filetypes=[("Media Files", "*.png;*.jpg;*.jpeg;*.webp;*.mp4;*.avi;*.mov")])
-        if fp:
-            self.attached_media_path = fp
-            icon = "🎬" if fp.lower().endswith(('.mp4', '.avi', '.mov')) else "🖼️"
-            self.img_attachment_lbl.configure(text=f"{icon} Attached: {os.path.basename(fp)}")
-
-    def extract_video_keyframes(self, video_path, num_frames=5):
-        """Extracts evenly spaced frames from a video and converts to Base64"""
-        frames_b64 = []
-        cap = cv2.VideoCapture(video_path)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        if total_frames > 0:
-            # Calculate intervals to get beginning, middle, and end frames
-            indices = [int(i * total_frames / num_frames) for i in range(num_frames)]
-            for idx in indices:
-                cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                ret, frame = cap.read()
-                if ret:
-                    # Compress frame to save API payload limits
-                    frame = cv2.resize(frame, (512, 512), interpolation=cv2.INTER_AREA)
-                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    frames_b64.append(base64.b64encode(buffer).decode('utf-8'))
-        cap.release()
-        return frames_b64
-
-    def run_agentic_workflow(self, query):
-        try:
-            media_path = self.attached_media_path
-            self.attached_media_path = None
-            self.after(0, lambda: self.img_attachment_lbl.configure(text=""))
-
-            self.after(0, lambda: self.status_indicator.configure(text="🔍 Searching Knowledge Base...", text_color=ACCENT_PRIMARY))
-            vs = self.get_cached_vectorstore()
-            context = "No documents provided."
-            if vs:
-                relevant_docs = vs.as_retriever(search_kwargs={"k": 5}).invoke(query)
-                context = "\n\n".join([f"[Doc: {d.metadata.get('source')}] {d.page_content}" for d in relevant_docs])
-
-            self.after(0, lambda: self.status_indicator.configure(text="🧠 Verifying Facts...", text_color="#2ecc71"))
-            facts = self.researcher_engine.invoke(f"Extract facts from: {context}\nTo answer query: {query}\nIf not in text, reply: [INSUFFICIENT_DATA].").content
-
-            self.after(0, lambda: self.chat_display.configure(state="normal"))
-            self.after(0, lambda: self.chat_display.insert("end", "🤖 Agent:\n"))
-            
-            full_resp = ""
-            
-            if media_path:
-                ext = media_path.lower().split('.')[-1]
-                content_payload = [{"type": "text", "text": f"User Query: {query}\nVerified Data: {facts}\nTask: Answer using the verified data AND the attached media. If text is [INSUFFICIENT_DATA], rely on the media."}]
-                
-                # --- VIDEO PROCESSING ---
-                if ext in ['mp4', 'avi', 'mov']:
-                    self.after(0, lambda: self.status_indicator.configure(text="🎬 Extracting Video Keyframes...", text_color="#e67e22"))
-                    keyframes = self.extract_video_keyframes(media_path)
-                    for b64 in keyframes:
-                        content_payload.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
-                
-                # --- IMAGE PROCESSING ---
-                else:
-                    self.after(0, lambda: self.status_indicator.configure(text="🖼️ Processing Visual Data...", text_color="#e67e22"))
-                    with open(media_path, "rb") as image_file:
-                        b64_img = base64.b64encode(image_file.read()).decode('utf-8')
-                    content_payload.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}})
-                
-                # Send Multimodal Payload
-                msg = HumanMessage(content=content_payload)
-                stream_gen = self.editor_engine.stream([msg])
-            else:
-                self.after(0, lambda: self.status_indicator.configure(text="✨ Streaming Grounded Response...", text_color="#ffffff"))
-                stream_gen = self.editor_engine.stream(f"User Query: {query}\nVerified Data: {facts}\nTask: Answer using only verified data. If [INSUFFICIENT_DATA], explain that documents don't have this info.")
-
-            for chunk in stream_gen:
-                token = self.format_ui_text(chunk.content)
-                full_resp += chunk.content
-                self.after(0, lambda t=token: self.chat_display.insert("end", t))
-                self.after(0, lambda: self.chat_display.see("end"))
-
-            FileChatMessageHistory(os.path.join(HISTORY_DIR, f"{self.current_session_id}.json")).add_user_message(query)
-            FileChatMessageHistory(os.path.join(HISTORY_DIR, f"{self.current_session_id}.json")).add_ai_message(full_resp)
-
-            self.after(0, lambda: self.chat_display.insert("end", "\n\n"))
-            self.after(0, lambda: self.chat_display.configure(state="disabled"))
-            self.after(0, lambda: self.status_indicator.configure(text="🟢 System Ready", text_color=TEXT_MUTED))
-        except Exception as e:
-            self.after(0, lambda: self.status_indicator.configure(text=f"❌ Error: {str(e)}", text_color="#e74c3c"))
-        self.after(0, lambda: self.user_input.configure(state="normal"))
-
-    # ==========================================
-    # 3. SYSTEM BOOTSTRAP & UI
-    # ==========================================
-    def setup_ai(self):
-        self.api_key = os.environ.get("OPENROUTER_API_KEY")
-        self.researcher_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="google/gemma-3-27b-it:free")
-        self.editor_engine = ChatOpenAI(base_url="https://openrouter.ai/api/v1", api_key=self.api_key, model="google/gemini-2.0-flash-lite-preview-02-05:free", streaming=True)
-        self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-
-    def load_save_data(self):
-        self.user_name, self.current_session_id, self.session_history, self.app_theme = None, str(uuid.uuid4()), [], "Dark"
-        if os.path.exists(SAVE_FILE):
+            import customtkinter, langchain_openai, faiss, fitz
+            self.update_text("Environment Verified.", "#10b981")
+        except ImportError:
+            self.update_text("Installing Dependencies...", "#f59e0b")
             try:
-                data = json.load(open(SAVE_FILE, "r"))
-                self.user_name, self.current_session_id, self.session_history, self.app_theme = data.get("user_name"), data.get("session_id"), data.get("history_list", []), data.get("app_theme", "Dark")
-            except: pass
+                subprocess.check_call([sys.executable, "-m", "pip", "install", "-q"] + required)
+            except Exception as e:
+                self.after(0, lambda: messagebox.showerror("Setup Error", f"Failed to install dependencies:\n{e}"))
+                self.after(0, lambda: sys.exit(1))
 
-    def save_current_state(self):
-        json.dump({"user_name": self.user_name, "session_id": self.current_session_id, "history_list": self.session_history, "app_theme": self.app_theme}, open(SAVE_FILE, "w"), indent=4)
+        # 2. Sync Engine with strict Cache-Busting
+        self.update_text("Syncing with Cloud Engine...")
+        try:
+            req = urllib.request.Request(
+                GITHUB_URL + "?t=" + str(time.time()), 
+                headers={'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache'}
+            )
+            with urllib.request.urlopen(req, timeout=15) as r:
+                code = r.read().decode('utf-8')
+            with open(ENGINE_FILE, "w", encoding="utf-8") as f:
+                f.write(code)
+        except Exception as e:
+            if not os.path.exists(ENGINE_FILE):
+                self.after(0, lambda: messagebox.showerror("Network Error", "Cannot reach GitHub and no local cache exists."))
+                self.after(0, lambda: sys.exit(1))
 
-    def show_boot_screen(self):
-        self.boot_frame = ctk.CTkFrame(self, fg_color="transparent"); self.boot_frame.pack(fill="both", expand=True)
-        box = ctk.CTkFrame(self.boot_frame, fg_color=BG_SURFACE, corner_radius=20, border_width=1, border_color="#1a1a2e")
-        box.place(relx=0.5, rely=0.5, anchor="center")
-        ctk.CTkLabel(box, text="SourceAgent Pro", font=(FONT_MAIN, 32, "bold"), text_color=ACCENT_PRIMARY).pack(pady=(50, 10), padx=60)
-        self.name_entry = ctk.CTkEntry(box, placeholder_text="Identify...", width=320, height=50)
-        self.name_entry.pack(pady=35, padx=50)
-        ctk.CTkButton(box, text="Sync Identity", height=45, command=self.first_time_launch).pack(pady=(0, 50))
+        time.sleep(0.5)
+        self.ready_to_launch = True
+        self.after(0, self.finish)
 
-    def first_time_launch(self):
-        if self.name_entry.get().strip(): self.user_name = self.name_entry.get().strip(); self.save_current_state()
-        self.boot_frame.destroy(); self.show_welcome_back_screen()
+    def finish(self):
+        self.pb.stop()
+        self.destroy()
 
-    def show_welcome_back_screen(self):
-        f = ctk.CTkFrame(self, fg_color="transparent"); f.pack(fill="both", expand=True)
-        ctk.CTkLabel(f, text=f"Omni-Vision Online, {self.user_name}.", font=(FONT_MAIN, 42, "bold"), text_color="white").place(relx=0.5, rely=0.5, anchor="center")
-        self.after(1500, lambda: [f.destroy(), self.launch_workspace()])
+def run_poller_and_app():
+    """Runs the main app in an isolated subprocess and polls for cloud updates."""
+    current_process = None
+    current_version = None
 
-    def launch_workspace(self):
-        self.build_main_ui(); threading.Thread(target=self.setup_ai, daemon=True).start()
+    # Fetch initial version
+    try:
+        req = urllib.request.Request(VERSION_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
+        with urllib.request.urlopen(req, timeout=5) as r:
+            current_version = json.loads(r.read().decode('utf-8')).get('app_version')
+    except:
+        pass
 
-    def build_main_ui(self):
-        self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
-        self.sidebar = ctk.CTkFrame(self, width=320, fg_color=BG_SIDEBAR); self.sidebar.grid(row=0, column=0, sticky="nsew")
-        ctk.CTkLabel(self.sidebar, text="📚 SourceAgent", font=(FONT_MAIN, 22, "bold")).pack(pady=30, padx=20, anchor="w")
-        ctk.CTkButton(self.sidebar, text="+ New Session", fg_color=ACCENT_PRIMARY, command=self.start_new_session).pack(fill="x", padx=20, pady=10)
-        self.history_list = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent", height=200); self.history_list.pack(fill="x", padx=10, pady=10)
-        self.source_list = ctk.CTkScrollableFrame(self.sidebar, fg_color="transparent", height=150); self.source_list.pack(fill="x", padx=10, pady=10)
+    # Inject vault directory into the subprocess environment
+    env = os.environ.copy()
+    env['VAULT_DIR'] = APP_DIR
+
+    # Launch the isolated CustomTkinter Engine
+    current_process = subprocess.Popen([sys.executable, ENGINE_FILE], env=env)
+
+    # Background Poller Loop
+    while True:
+        time.sleep(60) # Ping every 60s
         
-        f_btns = ctk.CTkFrame(self.sidebar, fg_color="transparent"); f_btns.pack(fill="x", padx=20, pady=10)
-        ctk.CTkButton(f_btns, text="Upload Docs", width=125, command=self.upload_files, fg_color=BG_SURFACE).pack(side="left", expand=True)
-        ctk.CTkButton(f_btns, text="Manage Docs", width=125, command=self.open_manage_sources_menu, fg_color="transparent", border_width=1, border_color="#e74c3c").pack(side="right", expand=True)
-        ctk.CTkButton(self.sidebar, text="Settings", command=self.open_settings_menu, fg_color="transparent", border_width=1).pack(side="bottom", fill="x", padx=20, pady=20)
+        # If the user closed the main application window, shut down the bootloader completely
+        if current_process.poll() is not None:
+            sys.exit(0)
 
-        self.chat_container = ctk.CTkFrame(self, fg_color=BG_SURFACE, corner_radius=15, border_width=1, border_color="#1a1a2e")
-        self.chat_container.grid(row=0, column=1, sticky="nsew", padx=25, pady=25)
-        self.chat_container.grid_rowconfigure(0, weight=1); self.chat_container.grid_columnconfigure(0, weight=1)
-        self.chat_display = ctk.CTkTextbox(self.chat_container, state="disabled", font=(FONT_MAIN, 16), wrap="word", fg_color="transparent")
-        self.chat_display.grid(row=0, column=0, sticky="nsew", padx=15, pady=20)
-        
-        info_frame = ctk.CTkFrame(self.chat_container, fg_color="transparent")
-        info_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0,8))
-        self.status_indicator = ctk.CTkLabel(info_frame, text="🟢 System Ready", text_color=TEXT_MUTED, font=(FONT_MAIN, 12, "italic"))
-        self.status_indicator.pack(side="left")
-        self.img_attachment_lbl = ctk.CTkLabel(info_frame, text="", text_color="#e67e22", font=(FONT_MAIN, 12, "bold"))
-        self.img_attachment_lbl.pack(side="right")
-        
-        w_in = ctk.CTkFrame(self.chat_container, fg_color="#050508", corner_radius=12); w_in.grid(row=2, column=0, sticky="ew", padx=15, pady=15)
-        w_in.grid_columnconfigure(1, weight=1)
-        
-        # OMNI-VISION BUTTON
-        ctk.CTkButton(w_in, text="📸", width=40, height=40, fg_color="transparent", border_width=1, border_color="#333", text_color="#f8fafc", command=self.attach_media).grid(row=0, column=0, padx=(10, 0))
-        
-        self.user_input = ctk.CTkEntry(w_in, placeholder_text="Ask about your docs or attached media...", height=60, border_width=0, fg_color="transparent")
-        self.user_input.grid(row=0, column=1, sticky="ew", padx=10); self.user_input.bind("<Return>", lambda e: self.send_message())
-        ctk.CTkButton(w_in, text="Send", width=90, command=self.send_message).grid(row=0, column=2, padx=10)
-        
-        self.update_sidebar_history(); self.update_source_list(); self.load_active_chat_to_display()
+        try:
+            req = urllib.request.Request(VERSION_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
+            with urllib.request.urlopen(req, timeout=5) as r:
+                new_v = json.loads(r.read().decode('utf-8')).get('app_version')
 
-    def get_cached_vectorstore(self):
-        h = str(sorted(os.listdir(SOURCE_DIR)))
-        if self.cached_vectorstore and self.cached_docs_hash == h: return self.cached_vectorstore
-        docs = []
-        for f in os.listdir(SOURCE_DIR):
-            p = os.path.join(SOURCE_DIR, f); ext = f.lower()
-            if ext.endswith(".pdf"): docs.extend(PyMuPDFLoader(p).load())
-            elif ext.endswith(".txt"): docs.extend(TextLoader(p, encoding="utf-8").load())
-            elif ext.endswith(".docx"): docs.extend(Docx2txtLoader(p).load())
-        if docs:
-            self.cached_vectorstore = FAISS.from_documents(RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200).split_documents(docs), self.embeddings)
-            self.cached_docs_hash = h; return self.cached_vectorstore
-        return None
-
-    def format_ui_text(self, t):
-        for r in [("**", ""), ("* ", "• "), ("### ", ""), ("## ", "")]: t = t.replace(*r)
-        return t
-
-    def send_message(self):
-        q = self.user_input.get().strip()
-        if q: self.user_input.delete(0, "end"); self.user_input.configure(state="disabled"); self.append_chat_to_ui(f"👤 You:\n{q}\n\n"); threading.Thread(target=self.run_agentic_workflow, args=(q,), daemon=True).start()
-
-    def append_chat_to_ui(self, t):
-        self.chat_display.configure(state="normal"); self.chat_display.insert("end", t); self.chat_display.configure(state="disabled"); self.chat_display.see("end")
-
-    def update_sidebar_history(self):
-        for w in self.history_list.winfo_children(): w.destroy()
-        for e in reversed(self.session_history):
-            f = ctk.CTkFrame(self.history_list, fg_color="transparent"); f.pack(fill="x", pady=2)
-            ctk.CTkButton(f, text=e['title'], anchor="w", fg_color="transparent", command=lambda s=e['id']: self.switch_to_session(s)).pack(side="left", fill="x", expand=True)
-
-    def switch_to_session(self, sid): self.current_session_id = sid; self.save_current_state(); self.load_active_chat_to_display()
-
-    def load_active_chat_to_display(self):
-        self.chat_display.configure(state="normal"); self.chat_display.delete("1.0", "end")
-        p = os.path.join(HISTORY_DIR, f"{self.current_session_id}.json")
-        if os.path.exists(p):
-            for m in json.load(open(p, "r")): self.chat_display.insert("end", f"{'👤 You' if m['type'] == 'human' else '🤖 Agent'}:\n{self.format_ui_text(m['data']['content'])}\n\n")
-        self.chat_display.configure(state="disabled"); self.chat_display.see("end")
-
-    def start_new_session(self):
-        sid = str(uuid.uuid4()); self.session_history.append({"id": sid, "title": f"Chat {datetime.datetime.now().strftime('%H:%M')}"})
-        self.current_session_id = sid; self.save_current_state(); self.update_sidebar_history(); self.load_active_chat_to_display()
-
-    def upload_files(self):
-        fs = filedialog.askopenfilenames()
-        if fs: [shutil.copy(f, SOURCE_DIR) for f in fs]; self.update_source_list(); self.cached_vectorstore = None
-
-    def update_source_list(self):
-        for w in self.source_list.winfo_children(): w.destroy()
-        for f in os.listdir(SOURCE_DIR): ctk.CTkLabel(self.source_list, text=f"• {f}", font=(FONT_MAIN, 12)).pack(anchor="w", padx=5)
-
-    def open_manage_sources_menu(self):
-        win = ctk.CTkToplevel(self); win.title("Manage"); win.geometry("400x500"); win.attributes("-topmost", True); win.grab_set()
-        sc = ctk.CTkScrollableFrame(win, fg_color="transparent"); sc.pack(fill="both", expand=True, padx=20, pady=20)
-        cbs = {}
-        for f in os.listdir(SOURCE_DIR): v = tk.BooleanVar(); ctk.CTkCheckBox(sc, text=f, variable=v).pack(anchor="w", pady=5); cbs[f] = v
-        def delete():
-            for f, v in cbs.items():
-                if v.get(): os.remove(os.path.join(SOURCE_DIR, f))
-            self.update_source_list(); self.cached_vectorstore = None; win.destroy()
-        ctk.CTkButton(win, text="Delete", fg_color="#e74c3c", command=delete).pack(pady=20)
-
-    def open_settings_menu(self):
-        win = ctk.CTkToplevel(self); win.title("Settings"); win.geometry("350x250"); win.attributes("-topmost", True)
-        ctk.CTkLabel(win, text="Build v4.9", font=(FONT_MAIN, 18)).pack(pady=20)
-        self.update_status_lbl = ctk.CTkLabel(win, text="Cloud Status: Monitored", text_color=TEXT_MUTED); self.update_status_lbl.pack()
-        ctk.CTkButton(win, text="Force Heartbeat", command=lambda: self.check_for_updates(True)).pack(pady=10)
+            if current_version and new_v and new_v != current_version:
+                # Update detected!
+                current_version = new_v
+                
+                # Download new code
+                req_code = urllib.request.Request(GITHUB_URL + "?t=" + str(time.time()), headers={'Cache-Control': 'no-cache'})
+                with urllib.request.urlopen(req_code, timeout=15) as rc:
+                    with open(ENGINE_FILE, "w", encoding="utf-8") as f:
+                        f.write(rc.read().decode('utf-8'))
+                
+                # Gracefully kill the old window and launch the new one
+                current_process.terminate()
+                current_process.wait()
+                current_process = subprocess.Popen([sys.executable, ENGINE_FILE], env=env)
+        except:
+            pass
 
 if __name__ == "__main__":
-    ChatApp().mainloop()
+    import multiprocessing
+    multiprocessing.freeze_support()
+    
+    app = Bootloader()
+    app.mainloop()
+
+    # Once the UI is completely dead, spawn the subprocess
+    if app.ready_to_launch:
+        run_poller_and_app()
