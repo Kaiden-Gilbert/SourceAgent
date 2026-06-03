@@ -1,4 +1,4 @@
-import os, sys, threading, shutil, json, time, urllib.request, subprocess, math, random, webbrowser
+import os, sys, threading, shutil, json, time, urllib.request, subprocess, math, random, webbrowser, re
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
@@ -15,7 +15,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader, CSVLoader
 
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 46.11 # Represents V46.1.1 logically for float comparisons
+CURRENT_VERSION = 47.0 
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
 REPO_URL = "https://github.com/Kaiden-Gilbert/SourceAgent"
 
@@ -50,10 +50,13 @@ STUDIO_PROMPTS = {
 # DEPENDENCY CHECKER & THEME LOADER
 # ==========================================
 def ensure_dependencies():
-    try: import docx2txt
-    except ImportError: subprocess.check_call([sys.executable, "-m", "pip", "install", "docx2txt", "-q"])
+    packages = ["docx2txt", "pyttsx3"]
+    for pkg in packages:
+        try: __import__(pkg)
+        except ImportError: subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "-q"])
 
 ensure_dependencies()
+import pyttsx3
 
 def load_initial_theme():
     theme_mode = "Dark"; accent_color = "blue"
@@ -92,7 +95,7 @@ class BouncySplash(ctk.CTkToplevel):
         
         self.canvas.create_text(300, 130, text="Source Agent", font=("Segoe UI", 48, "bold"), fill="#ffffff")
         
-        splashes = ["100% Offline!", "Air-Gapped!", "Now with Multi-Modal Ingestion!", "Omni-Reader Active!", "V46.1.1 Deployed!"]
+        splashes = ["100% Offline!", "Audio Mode Active!", "Now with Multi-Modal Ingestion!", "Omni-Reader Active!", "V47 Deployed!"]
         self.splash_id = self.canvas.create_text(450, 180, text=random.choice(splashes), font=("Segoe UI", 16, "bold", "italic"), fill="#facc15")
         self.status_id = self.canvas.create_text(300, 260, text="Initializing Omni-Reader...", font=("Segoe UI", 12), fill="#94a3b8")
 
@@ -154,10 +157,7 @@ class UpdateAdvisoryModal(ctk.CTkToplevel):
         self.update_idletasks(); x = (self.winfo_screenwidth() // 2) - 250; y = (self.winfo_screenheight() // 2) - 190
         self.geometry(f"+{x}+{y}")
         
-        # Determine logical version string for display
-        display_version = "46.1.1" if new_version == 46.11 else str(new_version)
-        
-        ctk.CTkLabel(self, text=f"Update V{display_version} Available", font=("Segoe UI", 24, "bold"), text_color="#f59e0b").pack(pady=(20, 5))
+        ctk.CTkLabel(self, text=f"Update V{new_version} Available", font=("Segoe UI", 24, "bold"), text_color="#f59e0b").pack(pady=(20, 5))
         ctk.CTkLabel(self, text="Release Notes & Changelog:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=30, pady=(10, 0))
         
         self.notes = ctk.CTkTextbox(self, width=440, height=160, font=("Segoe UI", 13), fg_color="#1e293b")
@@ -219,7 +219,7 @@ class ContactDeveloperWindow(ctk.CTkToplevel):
 class SourceAgentMaster(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Source Agent | Enterprise Workspace V46.1.1")
+        self.title(f"Source Agent | Enterprise Workspace V{CURRENT_VERSION}")
         self.geometry("1280x850")
         
         self.ai_model = "tinyllama"
@@ -309,7 +309,7 @@ class SourceAgentMaster(ctk.CTk):
                     self.after(0, lambda: NotificationToast(self, "Update Alert", msg, color="#f59e0b", action_text="Review Update", action_cmd=lambda: UpdateAdvisoryModal(self, cloud_version, changelog)))
                     return 
                 elif manual:
-                    self.after(0, lambda: messagebox.showinfo("Up to Date", f"You are currently running the latest version (V46.1.1)."))
+                    self.after(0, lambda: messagebox.showinfo("Up to Date", f"You are currently running the latest version (V{CURRENT_VERSION})."))
         except Exception as e: 
             if manual: self.after(0, lambda: messagebox.showerror("Network Error", f"Could not reach the update server: {e}"))
         
@@ -411,6 +411,26 @@ class SourceAgentMaster(ctk.CTk):
             except Exception as e: messagebox.showerror("IO Fault", f"Failed to prune document: {e}")
 
     # ------------------------------------------
+    # TTS AUDIO ENGINE (NON-BLOCKING)
+    # ------------------------------------------
+    def speak_text(self, raw_text):
+        """Scrubs markdown and runs TTS engine in a protected background thread."""
+        def _audio_worker():
+            try:
+                # Regex to strip out markdown asterisks, hashes, and source citations for clean reading
+                clean_text = re.sub(r'[*#]', '', raw_text)
+                clean_text = re.sub(r'\[Verified Sources:.*?\]', '', clean_text)
+                
+                engine = pyttsx3.init()
+                engine.setProperty('rate', 170) # Set a comfortable speaking pace
+                engine.say(clean_text)
+                engine.runAndWait()
+            except Exception as e:
+                print(f"TTS Engine Error: {e}")
+                
+        threading.Thread(target=_audio_worker, daemon=True).start()
+
+    # ------------------------------------------
     # TAB 1: AGENTIC CHAT 
     # ------------------------------------------
     def build_chat_tab(self):
@@ -436,7 +456,13 @@ class SourceAgentMaster(ctk.CTk):
         self.entry.bind("<Return>", lambda e: self.send_chat())
         
         self.research_var = ctk.BooleanVar(value=False)
-        ctk.CTkSwitch(input_frame, text="Deep Research", variable=self.research_var, font=("Segoe UI", 12, "bold")).grid(row=0, column=1, padx=(0, 10))
+        self.audio_var = ctk.BooleanVar(value=False) # NEW Audio Toggle
+        
+        toggles_frame = ctk.CTkFrame(input_frame, fg_color="transparent")
+        toggles_frame.grid(row=0, column=1, padx=(0, 10))
+        ctk.CTkSwitch(toggles_frame, text="Deep Research", variable=self.research_var, font=("Segoe UI", 12, "bold")).pack(pady=2)
+        ctk.CTkSwitch(toggles_frame, text="🔊 Audio Mode", variable=self.audio_var, font=("Segoe UI", 12, "bold"), progress_color="#8b5cf6").pack(pady=2)
+        
         ctk.CTkButton(input_frame, text="Query Core", width=120, height=50, font=("Segoe UI", 14, "bold"), command=self.send_chat).grid(row=0, column=2)
 
     def safe_insert_tagged(self, target, text, tag=None):
@@ -475,11 +501,17 @@ class SourceAgentMaster(ctk.CTk):
             sys_prompt = RESEARCH_PROMPT if is_deep_research else STRICT_TINYLLAMA_PROMPT
             
             stream = llm.stream([SystemMessage(content=sys_prompt), HumanMessage(content=structured_query)])
+            full_response = ""
             for chunk in stream:
                 self.safe_insert_tagged(self.chat, chunk.content)
+                full_response += chunk.content
             
             citations = ", ".join(sources_list) if sources_list else "None"
             self.safe_insert_tagged(self.chat, f"\n\n[Verified Sources: {citations}]\n---\n", "source")
+            
+            # TRIGGER TTS IF ENABLED
+            if self.audio_var.get():
+                self.speak_text(full_response)
             
             self.log_audit(q, "Success", sources_list)
             self.after(0, self.refresh_analytics)
@@ -502,6 +534,10 @@ class SourceAgentMaster(ctk.CTk):
         self.doc_type_menu.pack(side="left", padx=10)
         
         ctk.CTkButton(header_frame, text="✨ Generate Document", font=("Segoe UI", 13, "bold"), fg_color="#8b5cf6", hover_color="#7c3aed", command=self.generate_studio_doc).pack(side="left", padx=20)
+        
+        self.studio_audio_var = ctk.BooleanVar(value=False)
+        ctk.CTkSwitch(header_frame, text="🔊 Dictate Result", variable=self.studio_audio_var, font=("Segoe UI", 12, "bold"), progress_color="#8b5cf6").pack(side="left", padx=10)
+        
         ctk.CTkButton(header_frame, text="💾 Save to File", font=("Segoe UI", 13), fg_color="#10b981", hover_color="#059669", command=self.export_studio).pack(side="right")
         
         self.studio_box = ctk.CTkTextbox(self.tab_studio, font=("Consolas", 14), spacing1=5, spacing3=5)
@@ -529,7 +565,13 @@ class SourceAgentMaster(ctk.CTk):
             llm = ChatOllama(model=self.ai_model, temperature=0.1, base_url="http://localhost:11434")
             
             stream = llm.stream([SystemMessage(content=sys_prompt), HumanMessage(content=f"Context:\n{context}\n\nTask: Generate the {doc_type}.")])
-            for chunk in stream: self.safe_insert_tagged(self.studio_box, chunk.content)
+            full_response = ""
+            for chunk in stream: 
+                self.safe_insert_tagged(self.studio_box, chunk.content)
+                full_response += chunk.content
+                
+            if self.studio_audio_var.get():
+                self.speak_text(full_response)
             
             self.log_audit(f"Studio Gen: {doc_type}", "Success", list(set([d.metadata.get('source', 'Unknown') for d in docs])))
             self.after(0, self.refresh_analytics)
@@ -614,8 +656,8 @@ class SourceAgentMaster(ctk.CTk):
         color_menu.set(self.accent_color); color_menu.pack()
 
         tab_system = tabs.add("System Updates")
-        ctk.CTkLabel(tab_system, text=f"Current Build: V46.1.1", font=("Segoe UI", 12, "bold")).pack(pady=(20,10))
-        ctk.CTkButton(tab_system, text="Check for Updates", fg_color="#f59e0b", hover_color="#d97706", text_color="#020617", command=lambda: threading.Thread(target=self.sentinel_update_check, args=(True,), daemon=True).start()).pack(pady=10)
+        ctk.CTkLabel(tab_system, text=f"Current Build: V{CURRENT_VERSION}", font=("Segoe UI", 12, "bold")).pack(pady=(20,10))
+        ctk.CTkButton(tab_system, text="Check for Updates via GitHub", fg_color="#f59e0b", hover_color="#d97706", text_color="#020617", command=lambda: threading.Thread(target=self.sentinel_update_check, args=(True,), daemon=True).start()).pack(pady=10)
 
         def apply_changes():
             self.theme_mode = theme_menu.get()
