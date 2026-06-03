@@ -5,6 +5,8 @@
 ![Updates](https://img.shields.io/badge/Updates-Cloud%20Synced-orange)
 
 > **This project is still regularly updated and has more upcoming features. Please note that better designing and functionality will occur in the near future.**
+>
+> **This project does not use the internet to get results, it only uses the information from the sources! If anything occurs that you think is unsafe or innapropriate, please close the app and open an issue in the repository.**
 
 Welcome to **Source Agent**. This application is a fully localized intelligence node designed to operate directly on your machine. By bridging the power of the online Policy Advisor with local architecture, Source Agent allows you to securely inject your own custom knowledge bases, documentation, and data to assist with workflow, compliance, and general inquiries.
 
@@ -39,5 +41,7 @@ This project is actively maintained. If you encounter any bugs, experience unexp
 **Maintainer:** Kaiden Gilbert  
 
 *There is no special copyright preventing yoou from using this code as your own as it is 100% vibe coded!*
+
 *Please submit all bug reports or feature requests via email or by opening an Issue in this repository.*
+
 *You can contact the developer aswell inside the application!*
