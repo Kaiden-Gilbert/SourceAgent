@@ -13,7 +13,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.messages import HumanMessage, SystemMessage
 
 # --- CONFIGURATION & VERSIONING ---
-CURRENT_VERSION = 41.0
+CURRENT_VERSION = 42.0
 VERSION_URL = "https://raw.githubusercontent.com/Kaiden-Gilbert/SourceAgent/main/Updates/version.json"
 
 BASE_DIR = globals().get('VAULT_DIR', os.getcwd())
@@ -120,7 +120,7 @@ class ProvisionerWindow(ctk.CTkToplevel):
 
 
 # ==========================================
-# MAIN APPLICATION ENGINE (TABBED MONOLITH)
+# MAIN APPLICATION ENGINE
 # ==========================================
 class SourceAgentMaster(ctk.CTk):
     def __init__(self):
@@ -158,6 +158,7 @@ class SourceAgentMaster(ctk.CTk):
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         self.db = None
         self.load_db()
+        self.refresh_source_list()
         self.deiconify()
         threading.Thread(target=self.sentinel_update_check, daemon=True).start()
 
@@ -178,7 +179,7 @@ class SourceAgentMaster(ctk.CTk):
     def setup_ui(self):
         self.grid_columnconfigure(1, weight=1); self.grid_rowconfigure(0, weight=1)
         
-        # --- SIDEBAR ---
+        # --- SIDEBAR PANEL ---
         s = ctk.CTkFrame(self, width=280, fg_color="#020617", corner_radius=0)
         s.grid(row=0, column=0, sticky="nsew")
         ctk.CTkLabel(s, text="🏛️ Source Agent", font=("Segoe UI", 24, "bold")).pack(pady=(30, 10))
@@ -189,9 +190,16 @@ class SourceAgentMaster(ctk.CTk):
         ctk.CTkLabel(info_frame, text="Active Core: TinyLlama", font=("Segoe UI", 12, "bold"), text_color="#3b82f6").place(relx=0.5, rely=0.3, anchor="center")
         ctk.CTkLabel(info_frame, text=f"Build Version: {CURRENT_VERSION}", font=("Segoe UI", 10), text_color="#94a3b8").place(relx=0.5, rely=0.7, anchor="center")
 
-        ctk.CTkButton(s, text="📂 Ingest PDF Sources", font=("Segoe UI", 14, "bold"), height=45, fg_color="#0ea5e9", hover_color="#0284c7", command=self.add_docs).pack(fill="x", padx=20, pady=(20, 10))
+        ctk.CTkButton(s, text="📂 Ingest PDF Sources", font=("Segoe UI", 14, "bold"), height=45, fg_color="#0ea5e9", hover_color="#0284c7", command=self.add_docs).pack(fill="x", padx=20, pady=(20, 15))
         
-        # --- MAIN TABBED VIEW ---
+        # Ingested Sources Section Label
+        ctk.CTkLabel(s, text="📚 Ingested Sources:", font=("Segoe UI", 13, "bold"), text_color="#94a3b8").pack(anchor="w", padx=20, pady=(10, 5))
+        
+        # Scrollable panel for viewing and removing sources
+        self.sources_scroll = ctk.CTkScrollableFrame(s, fg_color="#0f172a", height=320)
+        self.sources_scroll.pack(fill="both", expand=True, padx=20, pady=(0, 25))
+
+        # --- MAIN TABBED ENGINE ---
         self.tabview = ctk.CTkTabview(self, fg_color="#0f172a", segmented_button_selected_color="#3b82f6")
         self.tabview.grid(row=0, column=1, sticky="nsew", padx=20, pady=20)
         
@@ -202,6 +210,55 @@ class SourceAgentMaster(ctk.CTk):
         self.build_chat_tab()
         self.build_studio_tab()
         self.build_analytics_tab()
+
+    def refresh_source_list(self):
+        """Wipes and repopulates the active file explorer frame in the sidebar."""
+        for widget in self.sources_scroll.winfo_children():
+            widget.destroy()
+            
+        try:
+            files = [f for f in os.listdir(SOURCE_DIR) if f.endswith(".pdf")]
+            if not files:
+                lbl = ctk.CTkLabel(self.sources_scroll, text="No sources ingested.", font=("Segoe UI", 12, "italic"), text_color="#64748b")
+                lbl.pack(pady=15)
+                return
+                
+            for f in files:
+                row = ctk.CTkFrame(self.sources_scroll, fg_color="transparent")
+                row.pack(fill="x", pady=3)
+                
+                # Truncate string gracefully if the filename overflows the sidebar layout bounding box
+                display_name = f if len(f) <= 22 else f[:19] + "..."
+                lbl = ctk.CTkLabel(row, text=display_name, font=("Segoe UI", 12), anchor="w")
+                lbl.pack(side="left", fill="x", expand=True, padx=(5, 5))
+                
+                btn = ctk.CTkButton(row, text="✕", width=24, height=24, fg_color="#ef4444", hover_color="#dc2626", text_color="white", font=("Segoe UI", 11, "bold"), command=lambda filename=f: self.delete_source(filename))
+                btn.pack(side="right", padx=5)
+        except Exception as e:
+            print(f"Error drawing source UI: {e}")
+
+    def delete_source(self, filename):
+        """Deletes a source file permanently from disk and initiates an autonomous vector hot-rebuild."""
+        if messagebox.askyesno("Confirm Removal", f"Are you sure you want to completely erase '{filename}' from the knowledge architecture?"):
+            try:
+                file_path = os.path.join(SOURCE_DIR, filename)
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                
+                remaining_pdfs = [f for f in os.listdir(SOURCE_DIR) if f.endswith(".pdf")]
+                if not remaining_pdfs:
+                    index_path = os.path.join(SOURCE_DIR, "faiss_index")
+                    if os.path.exists(index_path):
+                        shutil.rmtree(index_path)
+                    self.db = None
+                    self.refresh_source_list()
+                    messagebox.showinfo("Sources Cleared", "All source documentation has been wiped clean. Database reset complete.")
+                else:
+                    self.refresh_source_list()
+                    threading.Thread(target=self.rebuild_db, daemon=True).start()
+                    messagebox.showinfo("Hot Rebuilding Core", f"'{filename}' was deleted successfully. Re-indexing remaining sources in background loop...")
+            except Exception as e:
+                messagebox.showerror("IO Fault", f"Failed to prune document resource: {e}")
 
     # ------------------------------------------
     # TAB 1: AGENTIC CHAT
@@ -254,14 +311,14 @@ class SourceAgentMaster(ctk.CTk):
             
             self.after(0, lambda: self.safe_insert(self.chat, f"\n{final_resp}\n\n[Verified Sources: {citations}]\n---\n"))
             self.log_audit(q, "Success", sources_list)
-            self.after(0, self.refresh_analytics) # Update analytics tab automatically
+            self.after(0, self.refresh_analytics)
             
         except Exception as e: 
             self.after(0, lambda: self.safe_insert(self.chat, f"\nExecution Warning: {e}\n\n---\n"))
             self.log_audit(q, f"Error: {str(e)}", [])
 
     # ------------------------------------------
-    # TAB 2: NOTEBOOK STUDIO (DOCUMENT GENERATOR)
+    # TAB 2: NOTEBOOK STUDIO
     # ------------------------------------------
     def build_studio_tab(self):
         self.tab_studio.grid_columnconfigure(0, weight=1); self.tab_studio.grid_rowconfigure(1, weight=1)
@@ -293,7 +350,6 @@ class SourceAgentMaster(ctk.CTk):
 
     def _process_studio_generation(self, doc_type):
         try:
-            # We use a broad search query to pull general concepts from the FAISS db
             broad_query = "What are the core concepts, main topics, and primary details discussed in these documents?"
             docs = self.db.as_retriever(search_kwargs={"k": 8}).invoke(broad_query)
             context = "\n\n".join([f"Document Chunk:\n{d.page_content}" for d in docs])
@@ -396,6 +452,7 @@ class SourceAgentMaster(ctk.CTk):
         files = filedialog.askopenfilenames(filetypes=[("PDF Documents", "*.pdf")])
         if files:
             for f in files: shutil.copy(f, SOURCE_DIR)
+            self.refresh_source_list()
             threading.Thread(target=self.rebuild_db, daemon=True).start()
             messagebox.showinfo("Processing", "Documents added. Building vector table...")
 
@@ -409,7 +466,11 @@ class SourceAgentMaster(ctk.CTk):
             for d in split_docs: d.metadata['source'] = os.path.basename(d.metadata.get('source', 'Unknown'))
             self.db = FAISS.from_documents(split_docs, self.embeddings)
             self.db.save_local(os.path.join(SOURCE_DIR, "faiss_index"))
+        else:
+            self.db = None
+        self.after(0, self.refresh_source_list)
 
 if __name__ == "__main__":
+    from datetime import datetime
     app = SourceAgentMaster()
     app.mainloop()
