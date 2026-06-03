@@ -4,7 +4,7 @@
 ![Environment](https://img.shields.io/badge/Environment-Local%20%7C%20Offline-blue)
 ![Updates](https://img.shields.io/badge/Updates-Cloud%20Synced-orange)
 
-> **The localized, autonomous counterpart to the online Policy Advisor.**
+> **This project is still regularly updated and has more upcoming features. Please note that better designing and functionality will occur in the near future.**
 
 Welcome to **Source Agent**. This application is a fully localized intelligence node designed to operate directly on your machine. By bridging the power of the online Policy Advisor with local architecture, Source Agent allows you to securely inject your own custom knowledge bases, documentation, and data to assist with workflow, compliance, and general inquiries.
 
