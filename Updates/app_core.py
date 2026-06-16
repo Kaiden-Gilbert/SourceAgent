@@ -33,7 +33,7 @@ def check_boot_loop_circuit():
                 last_boot = float(f.read().strip())
             # If launched twice in less than 4 seconds, trip the breaker
             if now - last_boot < 4.0:
-                print("[0xCRIT] Boot loop detected! Tripping circuit breaker.")
+                print("[0xCRIT] Oh no a boot loop! Fixing immidiately!")
                 return True
         except: pass
     
@@ -73,7 +73,7 @@ class DecoupledBootloader(ctk.CTk):
         
         # UI Elements
         self.canvas.create_text(300, 120, text="Source Agent", font=("Segoe UI", 48, "bold"), fill="#ffffff")
-        self.canvas.create_text(300, 170, text="DECOUPLED LOCAL RUNTIME V53", font=("Segoe UI", 10, "bold"), fill="#10b981")
+        self.canvas.create_text(300, 170, text="Enteprise edition", font=("Segoe UI", 10, "bold"), fill="#10b981")
         self.console_id = self.canvas.create_text(50, 275, text="Initializing localized core...", font=("Consolas", 11), fill="#9ca3af", anchor="w")
         
         self.canvas.create_rectangle(50, 305, 530, 308, fill="#1f2937", width=0)
@@ -168,7 +168,7 @@ class DecoupledBootloader(ctk.CTk):
             else:
                 subprocess.Popen([sys.executable, CORE_FILE, "--launched-by-bootloader"])
         else:
-            ctk.CTkMessageBox(title="Missing Component", message="Critical Error: app_core.py not found in directory.")
+            ctk.CTkMessageBox(title="Missing Component", message="Critical Error: app_core.py not found in directory. Please reinstall the SourceAgent to fix this issue.")
         sys.exit()
 
 if __name__ == "__main__":
