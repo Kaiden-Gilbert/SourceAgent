@@ -13,15 +13,15 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_community.document_loaders import PyMuPDFLoader, TextLoader, Docx2txtLoader, CSVLoader
 
 # --- INFRASTRUCTURE CONFIGURATION ---
-CURRENT_VERSION = 50.0
+CURRENT_VERSION = 51.0
 BASE_DIR = os.getcwd()
-SOURCE_DIR = os.path.join(BASE_DIR, "source_docs")
+VAULTS_DIR = os.path.join(BASE_DIR, "vaults")
 AUDIT_FILE = os.path.join(BASE_DIR, "audit_log.json")
 SAVE_FILE = os.path.join(BASE_DIR, "config.json")
 CHATS_FILE = os.path.join(BASE_DIR, "chat_sessions.json")
 RECOVERY_FILE = os.path.join(BASE_DIR, "recovery.json")
 
-os.makedirs(SOURCE_DIR, exist_ok=True)
+os.makedirs(VAULTS_DIR, exist_ok=True)
 
 ui_queue = queue.Queue()
 audio_queue = queue.Queue()
@@ -34,8 +34,7 @@ DEFAULT_CONFIG = {
     "max_tokens": 512,
     "temperature": 0.2,
     "repeat_penalty": 1.2,
-    "chunk_depth": 5,
-    "vault_summary": "No active documents compiled in library vault."
+    "chunk_depth": 5
 }
 
 def load_app_config():
@@ -43,7 +42,6 @@ def load_app_config():
         try:
             with open(SAVE_FILE, "r") as f:
                 user_conf = json.load(f)
-                # Merge user choices over base defaults safely
                 return {**DEFAULT_CONFIG, **user_conf}
         except: pass
     return DEFAULT_CONFIG.copy()
@@ -72,13 +70,20 @@ def tts_worker_loop():
 threading.Thread(target=tts_worker_loop, daemon=True).start()
 
 # ====================================================================
-# PERSISTENT SESSION DATABASE MANAGER
+# ISOLATED SESSION DATABASE MANAGER (V51 UPGRADE)
 # ====================================================================
 class ChatSessionManager:
     def __init__(self):
         self.sessions = {}
         self.active_id = None
         self.load_all_sessions()
+
+    def get_vault_path(self):
+        """Returns the isolated folder path for the currently active chat."""
+        if not self.active_id: return None
+        path = os.path.join(VAULTS_DIR, self.active_id)
+        os.makedirs(path, exist_ok=True)
+        return path
 
     def load_all_sessions(self):
         if os.path.exists(CHATS_FILE):
@@ -104,9 +109,11 @@ class ChatSessionManager:
         self.sessions[s_id] = {
             "title": title,
             "created_at": datetime.now().isoformat(),
-            "messages": []
+            "messages": [],
+            "vault_summary": "No active documents compiled in this isolated session vault."
         }
         self.active_id = s_id
+        self.get_vault_path() # Ensure the physical folder is created
         self.save_all_sessions()
         return s_id
 
@@ -127,6 +134,11 @@ class ChatSessionManager:
 
     def delete_session(self, s_id):
         if s_id in self.sessions:
+            # Wipe the physical isolated vault for this chat
+            vault_path = os.path.join(VAULTS_DIR, s_id)
+            if os.path.exists(vault_path):
+                shutil.rmtree(vault_path, ignore_errors=True)
+            
             del self.sessions[s_id]
             if self.active_id == s_id:
                 self.active_id = list(self.sessions.keys())[0] if self.sessions else self.create_new_session("Workspace Link Alpha")
@@ -135,7 +147,7 @@ class ChatSessionManager:
 SESSION_DB = ChatSessionManager()
 
 # ====================================================================
-# SYSTEM INTERFACE HUD (ENTERPRISE REWRITE)
+# SYSTEM INTERFACE HUD
 # ====================================================================
 class SourceAgentMaster(ctk.CTk):
     def __init__(self):
@@ -143,19 +155,19 @@ class SourceAgentMaster(ctk.CTk):
         self.title(f"Source Agent Pro | Deep Research Terminal V{CURRENT_VERSION}")
         self.geometry("1300x880")
         
-        # Apply strict visual palette matrix 
         ctk.set_appearance_mode(APP_CONFIG["theme_mode"])
         ctk.set_default_color_theme(APP_CONFIG["accent_color"])
-        
         self.configure(fg_color="#090d16" if APP_CONFIG["theme_mode"] == "Dark" else "#f8fafc")
         
-        # Async background components
         self.embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         self.db = None
-        self.load_db()
         
         self.setup_ui_layout()
         self.process_ui_queue()
+        
+        # Load the DB for the initial active session
+        self.load_db()
+        self.refresh_source_list()
         self.refresh_session_sidebar()
         self.reload_active_chat_canvas()
 
@@ -176,24 +188,21 @@ class SourceAgentMaster(ctk.CTk):
         self.after(30, self.process_ui_queue)
 
     def setup_ui_layout(self):
-        self.grid_columnconfigure(0, weight=0) # Sidebar Threads
-        self.grid_columnconfigure(1, weight=1) # Focus Workspace Workspace
+        self.grid_columnconfigure(0, weight=0) 
+        self.grid_columnconfigure(1, weight=1) 
         self.grid_rowconfigure(0, weight=1)
 
-        # ----------------------------------------------------------------
-        # PANE 1: CONTROL AXIS SIDEBAR
-        # ----------------------------------------------------------------
+        # --- PANE 1: SIDEBAR ---
         sb = ctk.CTkFrame(self, width=300, fg_color="#111827" if APP_CONFIG["theme_mode"]=="Dark" else "#e2e8f0", corner_radius=0)
         sb.grid(row=0, column=0, sticky="nsew")
         
         ctk.CTkLabel(sb, text="Source Agent Pro", font=("Segoe UI", 22, "bold")).pack(pady=(25, 2))
-        ctk.CTkLabel(sb, text="Offline Intelligence Vault", font=("Segoe UI", 11, "bold"), text_color="#10b981").pack(pady=(0, 20))
+        ctk.CTkLabel(sb, text="Isolated Workspace Architecture", font=("Segoe UI", 11, "bold"), text_color="#10b981").pack(pady=(0, 20))
 
-        # Core Vault Management Card
         v_card = ctk.CTkFrame(sb, fg_color="#1f2937" if APP_CONFIG["theme_mode"]=="Dark" else "#cbd5e1", corner_radius=10)
         v_card.pack(fill="x", padx=15, pady=5)
         
-        ctk.CTkLabel(v_card, text="SYSTEM DOCUMENT VAULT", font=("Segoe UI", 11, "bold"), text_color="#9ca3af").pack(pady=(8,2))
+        ctk.CTkLabel(v_card, text="SESSION DOCUMENT VAULT", font=("Segoe UI", 11, "bold"), text_color="#9ca3af").pack(pady=(8,2))
         
         btn_f = ctk.CTkFrame(v_card, fg_color="transparent")
         btn_f.pack(fill="x", padx=10, pady=(5,10))
@@ -202,28 +211,21 @@ class SourceAgentMaster(ctk.CTk):
         ctk.CTkButton(btn_f, text="📥 Ingest", font=("Segoe UI", 12, "bold"), fg_color="#2563eb", height=34, command=self.add_docs).grid(row=0, column=0, padx=(0,4), sticky="ew")
         ctk.CTkButton(btn_f, text="🗑️ Clear", font=("Segoe UI", 12, "bold"), fg_color="#dc2626", height=34, command=self.clear_all_sources).grid(row=0, column=1, padx=(4,0), sticky="ew")
 
-        # Ingested items display panel
         ctk.CTkLabel(sb, text="COMPILED KNOWLEDGE BASIS:", font=("Segoe UI", 11, "bold"), text_color="#6b7280").pack(anchor="w", padx=20, pady=(15, 2))
         self.sources_scroll = ctk.CTkScrollableFrame(sb, height=160, fg_color="#030712" if APP_CONFIG["theme_mode"]=="Dark" else "#f1f5f9")
         self.sources_scroll.pack(fill="x", padx=15, pady=0)
-        self.refresh_source_list()
 
-        # Chat Sessions Segment Divider
         ctk.CTkLabel(sb, text="HISTORICAL CONVERSATIONS:", font=("Segoe UI", 11, "bold"), text_color="#6b7280").pack(anchor="w", padx=20, pady=(15, 2))
-        
         ctk.CTkButton(sb, text="➕ Initialize New Chat", font=("Segoe UI", 13, "bold"), fg_color="#059669", hover_color="#10b981", height=36, command=self.trigger_brand_new_chat).pack(fill="x", padx=15, pady=5)
         
         self.session_scroll = ctk.CTkScrollableFrame(sb, fg_color="#030712" if APP_CONFIG["theme_mode"]=="Dark" else "#f1f5f9")
         self.session_scroll.pack(fill="both", expand=True, padx=15, pady=(5, 15))
 
-        # Technical Footer
         ft = ctk.CTkFrame(sb, fg_color="transparent")
         ft.pack(side="bottom", fill="x", pady=15, padx=15)
         ctk.CTkButton(ft, text="⚙️ Operational Parameters", font=("Segoe UI", 12, "bold"), fg_color="#4b5563", command=self.open_advanced_settings).pack(fill="x", pady=2)
 
-        # ----------------------------------------------------------------
-        # PANE 2: FOCUS INTERACTIVE TAB ARCHITECTURE
-        # ----------------------------------------------------------------
+        # --- PANE 2: WORKSPACE ---
         self.tabview = ctk.CTkTabview(self, fg_color="#111827" if APP_CONFIG["theme_mode"]=="Dark" else "#ffffff")
         self.tabview.grid(row=0, column=1, sticky="nsew", padx=20, pady=15)
         
@@ -236,9 +238,6 @@ class SourceAgentMaster(ctk.CTk):
         self.build_chat_interface()
         self.build_studio_interface()
 
-    # ====================================================================
-    # COMPONENT GENERATORS & LOGIC ROUTINES
-    # ====================================================================
     def build_chat_interface(self):
         self.tab_chat.grid_columnconfigure(0, weight=1); self.tab_chat.grid_rowconfigure(0, weight=1)
         
@@ -250,7 +249,6 @@ class SourceAgentMaster(ctk.CTk):
         self.chat.tag_config("source", foreground="#fbbf24", font=("Segoe UI", 12, "italic"))
         self.chat.tag_config("system", foreground="#9ca3af", font=("Consolas", 12, "italic"))
         
-        # Interactive Control Dash
         ctrl_b = ctk.CTkFrame(self.tab_chat, fg_color="transparent")
         ctrl_b.grid(row=1, column=0, sticky="ew", padx=5, pady=5)
         ctrl_b.grid_columnconfigure(0, weight=1)
@@ -268,29 +266,27 @@ class SourceAgentMaster(ctk.CTk):
 
     def build_studio_interface(self):
         self.tab_studio.grid_columnconfigure(0, weight=1); self.tab_studio.grid_rowconfigure(1, weight=1)
-        
         head = ctk.CTkFrame(self.tab_studio, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew", pady=10, padx=5)
-        
         ctk.CTkLabel(head, text="Target Document Matrix:", font=("Segoe UI", 13, "bold")).pack(side="left", padx=(0, 8))
         self.studio_mode = ctk.CTkOptionMenu(head, values=["Executive Intelligence Brief", "Technical QA Log", "System Domain Map"], width=220)
         self.studio_mode.pack(side="left", padx=5)
-        
         ctk.CTkButton(head, text="✨ Synthesize Model Report", font=("Segoe UI", 12, "bold"), fg_color="#7c3aed", command=self.run_studio_generation).pack(side="left", padx=15)
         ctk.CTkButton(head, text="💾 Export MD", font=("Segoe UI", 12), fg_color="#059669", command=self.export_studio_markdown).pack(side="right")
-        
         self.studio_box = ctk.CTkTextbox(self.tab_studio, font=("Consolas", 14), spacing1=4, spacing3=4, border_width=1, border_color="#1e293b")
         self.studio_box.grid(row=1, column=0, sticky="nsew", padx=5, pady=(0, 10))
         self.studio_box.insert("1.0", "--- INTEL WORKSPACE TERMINAL ---\nSelect an processing layout configuration file mapping and run compilation above.")
 
     # ====================================================================
-    # FILE SYSTEM VAULT MANAGEMENT ENGINE
+    # ISOLATED VAULT MANAGEMENT ENGINE
     # ====================================================================
     def refresh_source_list(self):
         for w in self.sources_scroll.winfo_children(): w.destroy()
+        vault_path = SESSION_DB.get_vault_path()
+        if not vault_path: return
         valid = (".pdf", ".txt", ".docx", ".csv")
         try:
-            files = [f for f in os.listdir(SOURCE_DIR) if f.lower().endswith(valid)]
+            files = [f for f in os.listdir(vault_path) if f.lower().endswith(valid)]
             if not files:
                 ctk.CTkLabel(self.sources_scroll, text="No local files mounted.", font=("Segoe UI", 12, "italic"), text_color="#4b5563").pack(pady=12)
                 return
@@ -303,38 +299,42 @@ class SourceAgentMaster(ctk.CTk):
         except: pass
 
     def add_docs(self):
+        vault_path = SESSION_DB.get_vault_path()
         f_paths = filedialog.askopenfilenames(filetypes=[("Enterprise Documents", "*.pdf;*.txt;*.docx;*.csv")])
         if f_paths:
-            for p in f_paths: shutil.copy(p, SOURCE_DIR)
+            for p in f_paths: shutil.copy(p, vault_path)
             self.refresh_source_list()
             threading.Thread(target=self.rebuild_vector_matrix, daemon=True).start()
-            messagebox.showinfo("Vault Processing", "Knowledge ingestion protocol active. Compiling document vector layers...")
+            messagebox.showinfo("Vault Processing", "Knowledge ingestion protocol active. Compiling document vector layers for this session...")
 
     def purge_single_source(self, filename):
-        if messagebox.askyesno("Erase Source", f"Confirm removal of {filename} from target vector alignment?"):
+        vault_path = SESSION_DB.get_vault_path()
+        if messagebox.askyesno("Erase Source", f"Confirm removal of {filename} from this specific chat session?"):
             try:
-                os.remove(os.path.join(SOURCE_DIR, filename))
+                os.remove(os.path.join(vault_path, filename))
                 self.refresh_source_list()
                 threading.Thread(target=self.rebuild_vector_matrix, daemon=True).start()
             except Exception as e: messagebox.showerror("IO Fault", str(e))
 
     def clear_all_sources(self):
-        if messagebox.askyesno("Purge Storage Grid", "WARNING: This completely erases the offline analytical cache. Continue?"):
-            for f in os.listdir(SOURCE_DIR):
-                p = os.path.join(SOURCE_DIR, f)
+        vault_path = SESSION_DB.get_vault_path()
+        if messagebox.askyesno("Purge Session Vault", "WARNING: This erases all documents attached to this specific chat. Continue?"):
+            for f in os.listdir(vault_path):
+                p = os.path.join(vault_path, f)
                 if os.path.isfile(p): os.remove(p)
                 elif os.path.isdir(p) and f == "faiss_index": shutil.rmtree(p)
             self.db = None
-            APP_CONFIG["vault_summary"] = "No active documents compiled in library vault."
-            with open(SAVE_FILE, "w") as config_f: json.dump(APP_CONFIG, config_f)
+            SESSION_DB.sessions[SESSION_DB.active_id]["vault_summary"] = "No active documents compiled in this isolated session vault."
+            SESSION_DB.save_all_sessions()
             self.refresh_source_list()
-            messagebox.showinfo("System Matrix Cleared", "Analytical storage arrays reset successfully.")
+            messagebox.showinfo("Session Cleared", "Analytical storage for this chat reset successfully.")
 
     def rebuild_vector_matrix(self):
+        vault_path = SESSION_DB.get_vault_path()
         loaded_chunks = []
         file_profiles = []
-        for f in os.listdir(SOURCE_DIR):
-            p = os.path.join(SOURCE_DIR, f)
+        for f in os.listdir(vault_path):
+            p = os.path.join(vault_path, f)
             ext = f.lower().split('.')[-1]
             try:
                 if ext == "pdf": chunks = PyMuPDFLoader(p).load()
@@ -352,23 +352,27 @@ class SourceAgentMaster(ctk.CTk):
             for d in processed_docs:
                 d.metadata['source'] = os.path.basename(d.metadata.get('source', 'Unknown'))
             self.db = FAISS.from_documents(processed_docs, self.embeddings)
-            self.db.save_local(os.path.join(SOURCE_DIR, "faiss_index"))
+            self.db.save_local(os.path.join(vault_path, "faiss_index"))
             
-            # Formulate local context profile to make the AI smarter
             summary_str = "Active Data Vault Context Profile:\n" + "\n".join(file_profiles[:6])
-            APP_CONFIG["vault_summary"] = summary_str
+            SESSION_DB.sessions[SESSION_DB.active_id]["vault_summary"] = summary_str
         else:
             self.db = None
-            APP_CONFIG["vault_summary"] = "No active documents compiled in library vault."
+            SESSION_DB.sessions[SESSION_DB.active_id]["vault_summary"] = "No active documents compiled in this isolated session vault."
             
-        with open(SAVE_FILE, "w") as config_f:
-            json.dump(APP_CONFIG, config_f)
+        SESSION_DB.save_all_sessions()
 
     def load_db(self):
-        idx_path = os.path.join(SOURCE_DIR, "faiss_index")
+        vault_path = SESSION_DB.get_vault_path()
+        if not vault_path: 
+            self.db = None
+            return
+        idx_path = os.path.join(vault_path, "faiss_index")
         if os.path.exists(idx_path):
             try: self.db = FAISS.load_local(idx_path, self.embeddings, allow_dangerous_deserialization=True)
             except: self.db = None
+        else:
+            self.db = None
 
     # ====================================================================
     # ADVANCED SESSION WORKSPACE BACKEND INTERACTION
@@ -380,8 +384,6 @@ class SourceAgentMaster(ctk.CTk):
             f.pack(fill="x", pady=2, padx=2)
             
             trunc_title = data["title"] if len(data["title"]) <= 24 else data["title"][:21] + "..."
-            
-            # Selection handler wrapper
             btn = ctk.CTkButton(f, text=trunc_title, font=("Segoe UI", 12, "bold" if s_id == SESSION_DB.active_id else "normal"),
                                 anchor="w", fg_color="transparent", text_color="#f3f4f6" if s_id == SESSION_DB.active_id else "#9ca3af",
                                 hover_color="#374151", command=lambda idx=s_id: self.switch_active_session_channel(idx))
@@ -399,11 +401,19 @@ class SourceAgentMaster(ctk.CTk):
     def switch_active_session_channel(self, s_id):
         SESSION_DB.active_id = s_id
         SESSION_DB.save_all_sessions()
+        
+        # Core Hot-Swapping Logic
+        self.load_db()
+        self.refresh_source_list()
         self.refresh_session_sidebar()
         self.reload_active_chat_canvas()
 
     def remove_session_channel(self, s_id):
         SESSION_DB.delete_session(s_id)
+        
+        # Hot-Swap back to whatever session the DB defaulted to
+        self.load_db()
+        self.refresh_source_list()
         self.refresh_session_sidebar()
         self.reload_active_chat_canvas()
 
@@ -411,7 +421,7 @@ class SourceAgentMaster(ctk.CTk):
         ui_queue.put(("clear", self.chat, "", ""))
         messages = SESSION_DB.get_active_messages()
         
-        ui_queue.put(("insert", self.chat, f"[SYSTEM DATA NODE REGISTERED — LOGGED TRACKS AVAILABLE]\n\n", "system"))
+        ui_queue.put(("insert", self.chat, f"[SYSTEM DATA NODE REGISTERED — SECURE THREAD MOUNTED]\n\n", "system"))
         for msg in messages:
             if msg["role"] == "user":
                 ui_queue.put(("insert", self.chat, "USER: ", "user"))
@@ -429,7 +439,6 @@ class SourceAgentMaster(ctk.CTk):
         if not q: return
         self.entry.delete(0, "end")
         
-        # If thread name is generic timestamp, rename it to user's first query context 
         if "Inquiry Axis Thread" in SESSION_DB.sessions[SESSION_DB.active_id]["title"] and len(q) < 30:
             SESSION_DB.sessions[SESSION_DB.active_id]["title"] = q
             self.refresh_session_sidebar()
@@ -442,7 +451,7 @@ class SourceAgentMaster(ctk.CTk):
         threading.Thread(target=self.async_inference_engine, args=(q,), daemon=True).start()
 
     # ====================================================================
-    # ADVANCED NEURAL CORE INFERENCE PROCESSOR (ANTI-DOT MATRIX ENGINE)
+    # ADVANCED NEURAL CORE INFERENCE PROCESSOR
     # ====================================================================
     def async_inference_engine(self, query):
         is_deep = self.research_var.get()
@@ -456,9 +465,8 @@ class SourceAgentMaster(ctk.CTk):
             source_tags = list(set([d.metadata.get('source', 'Unknown') for d in docs]))
             
         context_block = "\n\n".join(context_chunks)
-        vault_profile = APP_CONFIG.get("vault_summary", "No documents loaded.")
+        vault_profile = SESSION_DB.sessions[SESSION_DB.active_id].get("vault_summary", "No documents loaded.")
         
-        # Strict defensive architectural layout construction for model orchestration prompt mapping
         base_system_prompt = (
             "You are Source Agent Pro, a secure terminal parsing system.\n"
             f"Vault Profile Overview:\n{vault_profile}\n\n"
@@ -471,7 +479,6 @@ class SourceAgentMaster(ctk.CTk):
         payload_input = f"Context Material Blocks:\n{context_block}\n\nUser Operational Request: {query}"
         
         try:
-            # We enforce temperature and repetition penalty configurations directly into the local host model instantiation matrix
             llm = ChatOllama(
                 model=APP_CONFIG["ai_model"],
                 temperature=float(APP_CONFIG["temperature"]),
@@ -488,7 +495,6 @@ class SourceAgentMaster(ctk.CTk):
             
             for stream_packet in stream:
                 content_segment = stream_packet.content
-                # Active defense filter targeting looping generation anomalies
                 if content_segment == "." and generation_accumulator.endswith("..."):
                     continue
                 ui_queue.put(("insert", self.chat, content_segment, ""))
@@ -505,7 +511,7 @@ class SourceAgentMaster(ctk.CTk):
                 audio_queue.put(generation_accumulator)
                 
         except Exception as err:
-            ui_queue.put(("insert", self.chat, f"\n[Core Connection Fault — Check Ollama Operational Diagnostics Instance]\nError: {str(err)}\n\n", "system"))
+            ui_queue.put(("insert", self.chat, f"\n[Core Connection Fault]\nError: {str(err)}\n\n", "system"))
 
     # ====================================================================
     # EXECUTIVE NOTEBOOK COMPILATION RAG STUDIO
@@ -568,7 +574,6 @@ class SourceAgentMaster(ctk.CTk):
         t1 = p.add("Model Orchestration")
         t2 = p.add("Workspace Interface")
         
-        # --- TAB 1: MODEL CONTROLS ---
         ctk.CTkLabel(t1, text="Maximum Predictive Length (Tokens):", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=15, pady=(15,2))
         s_tok = ctk.CTkSlider(t1, from_=128, to=2048, number_of_steps=15)
         s_tok.set(APP_CONFIG["max_tokens"])
@@ -601,7 +606,6 @@ class SourceAgentMaster(ctk.CTk):
         lbl_dep.pack(anchor="w", padx=20)
         s_dep.configure(command=lambda v: lbl_dep.configure(text=f"Context Block Target Count: {int(float(v))} sections"))
 
-        # --- TAB 2: INTERFACE CONTROLS ---
         ctk.CTkLabel(t2, text="Interface Structural Theme Color Mode:", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=15, pady=(15,2))
         m_theme = ctk.CTkOptionMenu(t2, values=["Dark", "Light"], width=420)
         m_theme.set(APP_CONFIG["theme_mode"])
